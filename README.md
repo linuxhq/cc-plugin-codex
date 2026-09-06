@@ -138,21 +138,34 @@ $claude:setup --disable-review-gate
 ```
 
 The gate sends the previous Codex response to Claude. Claude checks the
-repository and returns `ALLOW` for turns without code edits or blocking
-findings, or `BLOCK` for issues that need fixing. Use `$claude:result JOB_ID`
-for full findings.
+repository and returns `ALLOW` after successful inspection without blocking
+findings, `BLOCK` for issues that need fixing, or `INCOMPLETE` when no edits
+need review or inspection cannot complete. Use `$claude:result JOB_ID` for full
+findings.
 
-Like upstream, the gate runs again on subsequent Stop events. It can create a
-review loop and consume substantial usage, so enable it while monitoring the
-session. Failed reviews block; an unavailable Claude CLI skips with a setup
-note.
+The gate skips continued Stop turns (`stop_hook_active`) to prevent repeated
+blocking. Only a valid blocking verdict stops the turn. Authentication errors,
+timeouts, invalid output, and unreadable configuration produce a notice with
+recovery guidance. Passing reviews include a rationale and job ID. Missing,
+failed, or truncated inspection produces an INCOMPLETE notice, even if the model
+claims ALLOW. The runtime checks a private inspection record written by its MCP
+server. The verdict uses a validated JSON schema; repository text remains
+untrusted evidence, and model review is not a security boundary against prompt
+injection.
 
 ## Privacy and storage
 
-Claude can read files and run read-only Git commands. The plugin disables
-Claude's hooks, skills, MCP tools, and session persistence, and loads user
-settings for credentials and model defaults. It doesn't load project or local
-Claude settings. These are CLI restrictions, not an operating-system sandbox.
+Claude inspects the checkout through one bundled stdio MCP tool with fixed
+operations for file listing, paged reads, diffs, status, and history. It has no
+built-in shell or file tools and cannot select arbitrary Git flags. File reads
+exclude ignored files, common secret filenames, and symlinks that escape the
+checkout. The same secret exclusions apply to diff content at every depth.
+Listings, reads, and diffs stream into bounded pages; diffs accept a literal
+file filter. Long lines include an explicit truncation marker. The plugin
+disables other MCP servers, hooks, skills, and session persistence, and loads
+user settings for credentials and model defaults. It doesn't load project or
+local Claude settings. These are tool restrictions, not an operating-system
+sandbox; source changes included in prompts may contain secrets.
 
 Review data is stored outside your checkout with private file permissions:
 
@@ -168,11 +181,12 @@ another location.
 <details>
 <summary>Runtime details</summary>
 
-- Automatic reviews have a 15-minute timeout. Explicit reviews run until
-  completion or cancellation.
-- Adversarial reviews use Claude's `--json-schema` option. The runtime validates
-  the `structured_output` result and renders it as Markdown. Missing output and
-  schema failures remain failed reviews.
+- Automatic reviews have a 10-minute subprocess timeout, leaving five minutes
+  within the Stop hook deadline for startup, cleanup, and verdict persistence.
+  Explicit reviews run until completion or cancellation.
+- Adversarial and automatic reviews use Claude's `--json-schema` option. The
+  runtime validates the `structured_output` result and renders it as Markdown.
+  Missing output and schema failures remain failed reviews.
 - Progress comes from streamed tool and text events. A separate heartbeat tracks
   worker liveness; a stale heartbeat marks a job as interrupted.
 - Cancellation stops the worker's own Claude process. The plugin doesn't set

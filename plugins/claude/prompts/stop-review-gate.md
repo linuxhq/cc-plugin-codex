@@ -5,23 +5,23 @@ Only review it if Codex actually did code changes in that turn.
 Pure status, setup, or reporting output does not count as reviewable work.
 For example, the output of $claude:setup or $claude:status does not count.
 Only direct edits made in that specific turn count.
-If the previous Codex turn was only a status update, a summary, a setup/login check, a review result, or output from a command that did not itself make direct edits in that turn, return ALLOW immediately and do no further work.
+If the previous Codex turn was only a status update, a summary, a setup/login check, a review result, or output from a command that did not itself make direct edits in that turn, return INCOMPLETE with a reason that no code edits need review.
 Challenge whether that specific work and its design choices should ship.
 
 {{CODEX_RESPONSE_BLOCK}}
 </task>
 
 <compact_output_contract>
-Return a compact final answer.
-Your first line must be exactly one of:
-- ALLOW: <short reason>
-- BLOCK: <short reason>
-Do not put anything before that first line.
+Return a JSON object matching the supplied schema with exactly these fields:
+- decision: "ALLOW", "BLOCK", or "INCOMPLETE"
+- reason: a nonempty, concise explanation grounded in inspected evidence.
+Do not put Markdown or other text around the JSON.
 </compact_output_contract>
 
 <default_follow_through_policy>
-Use ALLOW if the previous turn did not make code changes or if you do not see a blocking issue.
-Use ALLOW immediately, without extra investigation, if the previous turn was not an edit-producing turn.
+Use ALLOW only after successful inspection with no blocking issue.
+Use INCOMPLETE when no code edits need review, inspection fails, evidence is
+truncated or unavailable, or you cannot substantiate a complete review.
 Use BLOCK only if the previous turn made code changes and you found something that still needs to be fixed before stopping.
 </default_follow_through_policy>
 

@@ -6,34 +6,16 @@ import { active, sessionJobs } from './status.mjs';
 import { storeRoot } from './store.mjs';
 import { executeJob } from './worker.mjs';
 
-const recovery =
-  'Run $claude:review for a manual review.\n' +
-  "Run $claude:setup --disable-review-gate to disable this checkout's gate.";
-
-export function gateFailure(message) {
-  return {
-    decision: 'block',
-    reason: `Claude automatic review did not pass:\n${message}\n${recovery}`,
-  };
-}
-
-export function parseGateOutput(output) {
-  const text = String(output ?? '').trim();
-  const firstLine = text.split(/\r?\n/, 1)[0];
-  if (firstLine.startsWith('ALLOW:')) return {};
-  if (firstLine.startsWith('BLOCK:')) {
-    return {
-      decision: 'block',
-      reason:
-        'Claude stop-time review found issues that still need fixes before ' +
-        `ending the session: ${firstLine.slice('BLOCK:'.length).trim()}`,
-    };
-  }
-  return gateFailure('The reviewer returned an invalid decision.');
-}
+import { gateFailure, parseGateOutput } from './gate-output.mjs';
+export { gateFailure, parseGateOutput } from './gate-output.mjs';
 
 export async function runGate(input) {
   if (input.hook_event_name !== 'Stop') return {};
+  if (input.stop_hook_active)
+    return {
+      systemMessage:
+        'Claude automatic review skipped after a continued Stop turn.',
+    };
   let repo;
   try {
     repo = await repositoryRoot(input.cwd || process.cwd());
@@ -52,8 +34,15 @@ export async function runGate(input) {
     ? `Claude job ${running.id} is still running. ` +
       `Check $claude:status or use $claude:cancel ${running.id}.`
     : '';
-  if (!(await readGateConfig(root)).enabled)
-    return note ? { systemMessage: note } : {};
+  let config;
+  try {
+    config = await readGateConfig(root);
+  } catch (error) {
+    return gateFailure(
+      `Cannot read review gate configuration: ${error.message}`,
+    );
+  }
+  if (!config.enabled) return note ? { systemMessage: note } : {};
   try {
     const available = await runProcess('claude', ['--version']);
     if (available.code !== 0) throw new Error('Claude is unavailable.');
@@ -68,9 +57,13 @@ export async function runGate(input) {
     };
   }
   const decision = await reviewResponse(repo, root, input);
+  return withNote(decision, note);
+}
+
+function withNote(decision, note) {
   if (note) {
-    if (decision.reason) decision.reason = `${note}\n${decision.reason}`;
-    else decision.systemMessage = note;
+    const field = decision.reason ? 'reason' : 'systemMessage';
+    decision[field] = [note, decision[field]].filter(Boolean).join('\n');
   }
   return decision;
 }
@@ -93,6 +86,7 @@ async function reviewResponse(repo, root, input) {
         `\nReview job: ${job.id}`,
     );
   const decision = parseGateOutput(completed.output);
-  if (decision.reason) decision.reason += `\nReview job: ${job.id}`;
+  const field = decision.reason ? 'reason' : 'systemMessage';
+  decision[field] += `\nReview job: ${job.id}`;
   return decision;
 }

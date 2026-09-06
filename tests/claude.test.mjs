@@ -5,17 +5,16 @@ import {
   parseResult,
 } from '../plugins/claude/scripts/lib/claude.mjs';
 
-test('only grants reading tools and disables hooks and MCP', () => {
-  const args = claudeArgs({ prompt: { system: 'review' } });
+test('only grants the private repository tool and disables hooks', () => {
+  const args = claudeArgs({ repo: '/repo', prompt: { system: 'review' } });
   const option = (name) => args[args.indexOf(name) + 1];
-  assert.equal(option('--tools'), 'Read,Glob,Grep,Bash');
-  assert.ok(option('--allowedTools').includes('Bash(git diff *)'));
-  assert.ok(!option('--allowedTools').includes('Bash(git *)'));
-  assert.ok(!option('--allowedTools').includes('Bash(git commit *)'));
-  assert.equal(option('--disallowedTools'), 'mcp__*');
+  assert.equal(option('--tools'), '');
+  assert.equal(option('--allowedTools'), 'mcp__repository__inspect');
   assert.equal(option('--permission-mode'), 'dontAsk');
   assert.deepEqual(JSON.parse(option('--settings')), { disableAllHooks: true });
-  assert.deepEqual(JSON.parse(option('--mcp-config')), { mcpServers: {} });
+  const servers = JSON.parse(option('--mcp-config')).mcpServers;
+  assert.deepEqual(Object.keys(servers), ['repository']);
+  assert.equal(servers.repository.args[1], '/repo');
   assert.ok(args.includes('--strict-mcp-config'));
   assert.ok(args.includes('--disable-slash-commands'));
   assert.ok(args.includes('--no-session-persistence'));

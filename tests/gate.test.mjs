@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process';
+import { gateReviewTimeout } from '../plugins/claude/scripts/lib/claude.mjs';
 import assert from 'node:assert/strict';
 import {
   mkdir,
@@ -103,7 +105,10 @@ test('bundled command handles spaces and stores findings', async (t) => {
       env: {
         ...f.env,
         PLUGIN_ROOT: installed,
-        FAKE_CLAUDE_OUTPUT: 'BLOCK: Regression\nP2 app.js:1 example.',
+        FAKE_CLAUDE_OUTPUT: JSON.stringify({
+          decision: 'BLOCK',
+          reason: 'Regression\nP2 app.js:1 example.',
+        }),
       },
       input: JSON.stringify({
         hook_event_name: 'Stop',
@@ -121,7 +126,7 @@ test('bundled command handles spaces and stores findings', async (t) => {
   assert.equal(
     decision.reason,
     'Claude stop-time review found issues that still need fixes before ' +
-      `ending the session: Regression\nReview job: ${id}`,
+      `ending the session: Regression\nP2 app.js:1 example.\nReview job: ${id}`,
   );
   assert.match((await f.run(['result', id])).stdout, /P2 app.js:1 example/);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
@@ -141,7 +146,8 @@ test('clean checkout still runs the response review', async (t) => {
   await f.run(['setup', '--enable-review-gate']);
   const output = await runHook(f, {}, { FAKE_CLAUDE_MODE: 'fail' });
   assert.equal(output.code, 0);
-  assert.equal(JSON.parse(output.stdout).decision, 'block');
+  assert.equal(JSON.parse(output.stdout).decision, undefined);
+  assert.match(JSON.parse(output.stdout).systemMessage, /could not complete/);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   assert.match(request.input, /Updated app.js/);
 });
@@ -154,26 +160,32 @@ test('ALLOW passes for a checkout with changes', async (t) => {
     f,
     {},
     {
-      FAKE_CLAUDE_OUTPUT: 'ALLOW: No blocking issue found.',
+      FAKE_CLAUDE_OUTPUT: JSON.stringify({
+        decision: 'ALLOW',
+        reason: 'No blocking issue found.',
+      }),
     },
   );
   assert.equal(output.code, 0);
-  assert.deepEqual(JSON.parse(output.stdout), {});
-  assert.match((await f.run(['result'])).stdout, /ALLOW:/);
+  assert.match(JSON.parse(output.stdout).systemMessage, /review passed/);
+  assert.match((await f.run(['result'])).stdout, /ALLOW/);
 });
 
-test('continued turns run reviews; unrelated events do not', async (t) => {
+test('continued turns skip reviews; unrelated events do not', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
   const output = await runHook(
     f,
     { stop_hook_active: true },
     {
-      FAKE_CLAUDE_OUTPUT: 'BLOCK: Still needs fixing',
+      FAKE_CLAUDE_OUTPUT: JSON.stringify({
+        decision: 'BLOCK',
+        reason: 'Still needs fixing',
+      }),
     },
   );
-  assert.equal(JSON.parse(output.stdout).decision, 'block');
-  await rm(f.env.FAKE_CLAUDE_CAPTURE);
+  assert.equal(JSON.parse(output.stdout).decision, undefined);
+  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
   for (const hook_event_name of ['UserPromptSubmit', 'SessionStart']) {
     assert.deepEqual(
       JSON.parse((await runHook(f, { hook_event_name })).stdout),
@@ -183,7 +195,7 @@ test('continued turns run reviews; unrelated events do not', async (t) => {
   await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
 });
 
-test('failed or malformed reviews never pass', async (t) => {
+test('review failures report notices without blocking', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
   await f.write('app.js', 'changed\n');
@@ -195,8 +207,8 @@ test('failed or malformed reviews never pass', async (t) => {
     const output = await runHook(f, {}, env);
     assert.equal(output.code, 0);
     const decision = JSON.parse(output.stdout);
-    assert.equal(decision.decision, 'block');
-    assert.match(decision.reason, /disable-review-gate/);
+    assert.equal(decision.decision, undefined);
+    assert.match(decision.systemMessage, /could not complete/);
   }
 });
 
@@ -216,7 +228,10 @@ test('gate settings are per worktree, shared by subdirectories', async (t) => {
     f,
     { cwd: subdir },
     {
-      FAKE_CLAUDE_OUTPUT: 'BLOCK: Test issue',
+      FAKE_CLAUDE_OUTPUT: JSON.stringify({
+        decision: 'BLOCK',
+        reason: 'Test issue',
+      }),
     },
   );
   assert.equal(JSON.parse(output.stdout).decision, 'block');
@@ -228,11 +243,11 @@ test('gate preserves diagnostics from both streams', async (t) => {
   await f.write('app.js', 'changed\n');
   const output = await runHook(f, {}, { FAKE_CLAUDE_MODE: 'json-error' });
   const decision = JSON.parse(output.stdout);
-  assert.equal(decision.decision, 'block');
-  assert.match(decision.reason, /Provider request failed/);
-  assert.match(decision.reason, /Account quota exhausted/);
-  assert.match(decision.reason, /Request could not complete/);
-  const saved = await f.run(['result', extractId(decision.reason)]);
+  assert.equal(decision.decision, undefined);
+  assert.match(decision.systemMessage, /Provider request failed/);
+  assert.match(decision.systemMessage, /Account quota exhausted/);
+  assert.match(decision.systemMessage, /Request could not complete/);
+  const saved = await f.run(['result', extractId(decision.systemMessage)]);
   assert.equal(saved.code, 0);
   assert.match(saved.stdout, /Provider request failed/);
 });
@@ -256,8 +271,8 @@ test('cancellation stops the gate and returns feedback', async (t) => {
   });
   await f.run(['cancel', id]);
   const output = JSON.parse((await pending).stdout);
-  assert.equal(output.decision, 'block');
-  assert.match(output.reason, /cancelled/);
+  assert.equal(output.decision, undefined);
+  assert.match(output.systemMessage, /cancelled/);
 });
 
 test('corrupt configuration surfaces feedback and can be reset', async (t) => {
@@ -267,23 +282,34 @@ test('corrupt configuration surfaces feedback and can be reset', async (t) => {
   const [key] = await readdir(jobs);
   await writeFile(join(jobs, key, 'gate.json'), '{"enabled":"false"}');
   const output = JSON.parse((await runHook(f)).stdout);
-  assert.equal(output.decision, 'block');
-  assert.match(output.reason, /Invalid review gate configuration/);
+  assert.equal(output.decision, undefined);
+  assert.match(output.systemMessage, /Invalid review gate configuration/);
   assert.equal((await f.run(['setup', '--disable-review-gate'])).code, 0);
   assert.deepEqual(JSON.parse((await runHook(f)).stdout), {});
 });
 
-test('decision parser matches upstream ALLOW and BLOCK prefixes', () => {
+test('decision parser requires a structured, nonempty verdict', () => {
   for (const output of [
     '',
-    'BLOCK:',
-    'Here is my review\nALLOW: fine',
-    '```\nALLOW: fine\n```',
+    'ALLOW: fine',
+    'null',
+    '{}',
+    '{"decision":"BLOCK","reason":""}',
+    '{"decision":"ALLOW","reason":"fine","extra":true}',
   ]) {
-    assert.equal(parseGateOutput(output).decision, 'block');
+    const parsed = parseGateOutput(output);
+    assert.equal(parsed.decision, undefined);
+    assert.match(parsed.systemMessage, /invalid decision/);
   }
-  assert.deepEqual(parseGateOutput('ALLOW:'), {});
-  assert.deepEqual(parseGateOutput('ALLOW: No findings.\r\nLimitations.'), {});
+  assert.match(
+    parseGateOutput('{"decision":"ALLOW","reason":"No findings."}')
+      .systemMessage,
+    /passed/,
+  );
+  assert.equal(
+    parseGateOutput('{"decision":"BLOCK","reason":"Regression"}').decision,
+    'block',
+  );
 });
 
 test('unavailable CLI reports setup guidance without blocking', async (t) => {
@@ -305,10 +331,13 @@ test('reporting turns use the response review', async (t) => {
     f,
     { last_assistant_message: message },
     {
-      FAKE_CLAUDE_OUTPUT: 'ALLOW: Reporting only',
+      FAKE_CLAUDE_OUTPUT: JSON.stringify({
+        decision: 'ALLOW',
+        reason: 'Reporting only',
+      }),
     },
   );
-  assert.deepEqual(JSON.parse(output.stdout), {});
+  assert.match(JSON.parse(output.stdout).systemMessage, /review passed/);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   assert.ok(request.input.includes(message));
   assert.match(request.input, /Pure status, setup, or reporting output/);
@@ -351,4 +380,62 @@ test('gate running-job notices prefer the hook session', async (t) => {
     ).stdout,
   );
   assert.deepEqual(empty, {});
+});
+
+test('automatic review leaves time inside the hook deadline', async () => {
+  const config = JSON.parse(await readFile(join(plugin, 'hooks/hooks.json')));
+  assert.ok(
+    gateReviewTimeout + 60_000 < config.hooks.Stop[0].hooks[0].timeout * 1000,
+  );
+});
+
+test('terminating the hook terminates its running reviewer', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  const child = spawn(process.execPath, [hook], {
+    cwd: f.repo,
+    env: { ...f.env, FAKE_CLAUDE_MODE: 'slow' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  t.after(() => child.kill('SIGKILL'));
+  let output = '';
+  child.stdout.on('data', (chunk) => {
+    output += chunk;
+  });
+  child.stderr.resume();
+  const closed = new Promise((resolve) => child.once('close', resolve));
+  child.stdin.end(JSON.stringify({ hook_event_name: 'Stop', cwd: f.repo }));
+  const pid = await eventually(async () => {
+    try {
+      return JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).pid;
+    } catch {
+      return false;
+    }
+  });
+  child.kill('SIGTERM');
+  await closed;
+  assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
+  assert.match(JSON.parse(output).systemMessage, /cancelled/);
+});
+
+test('missing or failed inspection cannot be reported as ALLOW', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  for (const mode of ['no-inspection', 'inspection-failed']) {
+    const output = await runHook(
+      f,
+      {},
+      {
+        FAKE_CLAUDE_MODE: mode,
+        FAKE_CLAUDE_OUTPUT: JSON.stringify({
+          decision: 'ALLOW',
+          reason: 'Fine',
+        }),
+      },
+    );
+    const decision = JSON.parse(output.stdout);
+    assert.equal(decision.decision, undefined);
+    assert.match(decision.systemMessage, /could not complete/);
+    assert.doesNotMatch(decision.systemMessage, /review passed/);
+  }
 });

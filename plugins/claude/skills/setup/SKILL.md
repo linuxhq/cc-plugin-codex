@@ -28,6 +28,8 @@ explain that the user must trust it in `/hooks` and start a new session after
 installing or updating the plugin.
 
 The gate sends the previous Codex response to Claude to review that turn's work.
-Claude returns ALLOW for turns without code edits or blocking findings, and
-BLOCK for issues that need fixing. Subsequent Stop events run the gate again.
-Reviews consume Claude usage and appear in status, result, and cancel commands.
+Claude returns ALLOW after successful inspection without blocking findings,
+BLOCK for issues that need fixing, or INCOMPLETE when no edits need review or
+inspection cannot complete. Continued Stop turns skip the gate to avoid repeated
+blocking. Infrastructure failures return a notice instead of blocking. Reviews
+consume Claude usage and appear in status, result, and cancel commands.

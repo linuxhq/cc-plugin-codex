@@ -11,7 +11,11 @@ const marketplace = await json('.agents/plugins/marketplace.json');
 const pkg = await json('package.json');
 assert.equal(manifest.name, 'claude');
 assert.equal(marketplace.name, 'linuxhq');
-assert.equal(manifest.version, pkg.version);
+const [version, cachebuster, ...extra] = manifest.version.split('+');
+assert.equal(version, pkg.version);
+assert.equal(extra.length, 0);
+if (cachebuster !== undefined)
+  assert.match(cachebuster, /^codex\.[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/);
 assert.equal(manifest.skills, './skills/');
 assert.equal(marketplace.plugins[0].name, manifest.name);
 assert.equal(marketplace.plugins[0].source.path, './plugins/claude');

@@ -1,3 +1,4 @@
+import { sensitive, secretExclusions } from './repository-policy.mjs';
 import { createHash } from 'node:crypto';
 import { lstat, readFile, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -6,12 +7,20 @@ import { runProcess } from './process.mjs';
 const maxContextBytes = 1024 * 1024;
 
 export async function git(cwd, args, options = {}) {
-  const result = await runProcess('git', ['--no-pager', ...args], {
-    cwd,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
-    maxBytes: maxContextBytes * 2,
-    ...options,
-  });
+  const result = await runProcess(
+    'git',
+    ['--no-pager', '-c', 'core.fsmonitor=false', ...args],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        GIT_OPTIONAL_LOCKS: '0',
+        GIT_TERMINAL_PROMPT: '0',
+      },
+      maxBytes: maxContextBytes * 2,
+      ...options,
+    },
+  );
   if (result.code !== 0)
     throw new Error(result.stderr.trim() || 'Git command failed.');
   return result.stdout;
@@ -30,7 +39,9 @@ export async function collectReview(repo, options = {}) {
   if (options.command === 'review')
     return {
       ...target,
-      context: 'Inspect the target diff using read-only Git commands.',
+      context:
+        'Inspect the target diff using the repository inspect tool ' +
+        '(diff operation).',
       inputMode: 'self-collect',
     };
   const details =
@@ -44,8 +55,8 @@ export async function collectReview(repo, options = {}) {
       details.inputMode === 'inline-diff'
         ? 'Use the repository context below as primary evidence.'
         : 'The repository context below is a lightweight summary. ' +
-          'Inspect the target diff yourself with read-only git commands ' +
-          'before finalizing findings.',
+          'Use the repository inspect tool: diff for changes, files/read for ' +
+          'surrounding code, and status/log for context before findings.',
   };
 }
 
@@ -108,7 +119,7 @@ async function diffContext(repo, sections, files) {
   if (files.length <= 2) {
     for (const [label, args] of sections) {
       parts.push(`${label}\n`);
-      await git(repo, [...diffFlags, ...args, '--'], {
+      await git(repo, [...diffFlags, ...args, '--', ...secretExclusions], {
         captureStdout: false,
         onStdout(chunk) {
           bytes += Buffer.byteLength(chunk);
@@ -200,6 +211,7 @@ async function workingContext(repo) {
 }
 
 async function untrackedFile(repo, file) {
+  if (sensitive.test(file)) return 'Sensitive untracked file omitted.';
   const path = join(repo, file);
   const title = `UNTRACKED FILE ${JSON.stringify(file)}\n`;
   try {

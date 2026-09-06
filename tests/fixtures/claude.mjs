@@ -31,8 +31,18 @@ if (args[0] === '--version') {
   for await (const chunk of process.stdin) input += chunk;
   await writeFile(
     process.env.FAKE_CLAUDE_CAPTURE,
-    JSON.stringify({ args, input, cwd: process.cwd() }),
+    JSON.stringify({ args, input, cwd: process.cwd(), pid: process.pid }),
   );
+  const mcp = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
+  const audit = mcp.mcpServers.repository.args[2];
+  if (audit && mode !== 'no-inspection')
+    await writeFile(
+      audit,
+      JSON.stringify({
+        successes: 1,
+        failures: mode === 'inspection-failed' ? 1 : 0,
+      }),
+    );
   if (args.includes('stream-json')) {
     console.log(JSON.stringify({ type: 'system', subtype: 'init' }));
     console.log(JSON.stringify({ type: 'tool_progress', tool_name: 'Read' }));
