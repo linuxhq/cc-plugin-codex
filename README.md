@@ -95,28 +95,33 @@ The gate is disabled by default. Setup without flags reports its state and
 checks Claude authentication. Enabling checks authentication before saving the
 setting; disabling works even when Claude is unavailable.
 
-Use a Codex version with [plugin-bundled Stop hooks][codex-hooks] (the hook
-contract was checked against Codex CLI 0.153.1). After installing or updating
-the plugin, start a new session and review and trust its Stop hook in `/hooks`.
-Codex skips untrusted hooks. Enabling the gate does not change Codex's hook
-trust or override a global or administrator setting that disables hooks.
+Use a Codex version with [UserPromptSubmit and Stop hooks][codex-hooks]. After
+installing or updating the plugin, start a new session and review and trust both
+hooks in `/hooks`. Codex skips untrusted hooks. Enabling the gate does not
+change Codex's hook trust or override a global or administrator setting that
+disables hooks.
 
-At Stop, Claude receives the previous Codex response and the current Git patch,
-and can inspect surrounding files with read-only tools. Its instructions limit
-findings to the previous turn's code work and allow status, setup, questions,
-and reporting-only turns. Turn attribution is model-based: the patch can contain
-older edits, and committed changes are not included in the working-tree patch.
-This is a review aid, not proof that every edit was checked.
+At UserPromptSubmit, the hook snapshots the checkout's file contents for the
+session and turn. At Stop, it compares the current contents with that snapshot.
+If nothing changed, it skips Claude even when older uncommitted edits exist.
+Otherwise, Claude receives only the turn's Git diff, without conversation text,
+and can inspect surrounding files with read-only tools. Edits committed during
+the turn are included; staging or committing existing edits alone does not
+trigger a review. Snapshots use a separate index and object store in the plugin
+data directory, leaving the checkout's index and history untouched.
 
-An `ALLOW` decision lets Codex finish. `BLOCK` tells Codex to evaluate each
-finding against the code, automatically fix the issues it agrees with within the
-authorized task scope, and run relevant checks before finishing. It must explain
-rejected findings with evidence, and report fixes, validation, and anything
-unresolved. It should not stop at presenting the review or ask whether to fix
-accepted findings. Failed, cancelled, and malformed reviews also return feedback
-instead of counting as a pass. The hook skips a continuation already triggered
-by a Stop hook to prevent endless review loops; run `$claude:review` to verify
-the fixes. It skips non-Git directories.
+If the starting snapshot is missing, the hook skips with an explanatory message
+instead of reviewing older changes. Concurrent external edits during the same
+turn are included: the comparison identifies when contents changed, not who
+edited them. Ignored untracked files are excluded.
+
+An `ALLOW` decision lets Codex finish. `BLOCK` returns a short message saying
+issues still need fixes before ending the session, followed by the reviewer's
+first-line summary and the review job ID. Use `$claude:result` with that ID to
+read the full findings. Failed, cancelled, and malformed reviews also return
+feedback instead of counting as a pass. The hook skips a continuation already
+triggered by a Stop hook to prevent endless review loops; run `$claude:review`
+to verify the fixes. It skips non-Git directories.
 
 Automatic runs consume Claude account usage, including when Claude decides a
 turn needs no further review. They use Claude's configured model and effort,

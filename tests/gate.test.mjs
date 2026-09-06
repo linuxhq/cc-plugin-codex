@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
 import { parseGateOutput } from '../plugins/claude/scripts/lib/gate.mjs';
-import { eventually, extractId, fixture } from './helpers.mjs';
+import { eventually, extractId, fixture as baseFixture } from './helpers.mjs';
 
 const plugin = fileURLToPath(new URL('../plugins/claude/', import.meta.url));
 const hook = join(plugin, 'scripts/stop-review-gate-hook.mjs');
@@ -31,6 +31,20 @@ function runHook(f, input = {}, env = {}) {
       ...input,
     }),
   });
+}
+
+async function fixture(t) {
+  const f = await baseFixture(t);
+  const run = f.run;
+  f.run = async (args, env) => {
+    const result = await run(args, env);
+    if (args.includes('--enable-review-gate') && result.code === 0) {
+      const start = await runHook(f, { hook_event_name: 'UserPromptSubmit' });
+      assert.deepEqual(JSON.parse(start.stdout), {});
+    }
+    return result;
+  };
+  return f;
 }
 
 test('disabled gate starts no review and creates no state', async (t) => {
@@ -74,8 +88,8 @@ test('failed authentication does not enable the gate', async (t) => {
 
 test('bundled command handles spaces and stores findings', async (t) => {
   const f = await fixture(t);
-  await f.write('app.js', 'export const value = 0;\n');
   await f.run(['setup', '--enable-review-gate']);
+  await f.write('app.js', 'export const value = 0;\n');
   const config = JSON.parse(await readFile(join(plugin, 'hooks/hooks.json')));
   // Exercise the actual command and PLUGIN_ROOT substitution, including spaces.
   const { cp } = await import('node:fs/promises');
@@ -94,6 +108,8 @@ test('bundled command handles spaces and stores findings', async (t) => {
       input: JSON.stringify({
         hook_event_name: 'Stop',
         cwd: f.repo,
+        session_id: 'test-session',
+        turn_id: 'test-turn',
         last_assistant_message: 'Changed app.js $(touch injected).',
       }),
     },
@@ -101,25 +117,35 @@ test('bundled command handles spaces and stores findings', async (t) => {
   assert.equal(output.code, 0, output.stderr);
   const decision = JSON.parse(output.stdout);
   assert.equal(decision.decision, 'block');
-  assert.match(decision.reason, /P2 app.js:1/);
-  assert.match(decision.reason, /Continue working now/);
-  assert.match(decision.reason, /automatically implement/);
-  assert.match(decision.reason, /run relevant checks/);
-  assert.match(decision.reason, /Do not stop at reporting findings/);
-  assert.match(decision.reason, /findings you reject, explain why/);
   const id = extractId(decision.reason);
-  assert.match((await f.run(['result', id])).stdout, /BLOCK: Regression/);
+  assert.equal(
+    decision.reason,
+    'Claude stop-time review found issues that still need fixes before ' +
+      `ending the session: Regression\nReview job: ${id}`,
+  );
+  assert.match((await f.run(['result', id])).stdout, /P2 app.js:1 example/);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
-  assert.ok(request.input.includes('$(touch injected)'));
+  assert.ok(!request.input.includes('$(touch injected)'));
   assert.ok(request.input.includes('export const value = 0'));
   assert.equal(request.cwd, f.repo);
   assert.ok(!(await readdir(f.repo)).includes('injected'));
   assert.match((await f.run(['status', id])).stdout, /stop-review-gate/);
 });
 
-test('ALLOW passes even with a clean committed checkout', async (t) => {
+test('clean checkout skips Claude despite provider failure', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
+  const output = await runHook(f, {}, { FAKE_CLAUDE_MODE: 'fail' });
+  assert.equal(output.code, 0);
+  assert.deepEqual(JSON.parse(output.stdout), {});
+  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
+  assert.match((await f.run(['status'])).stdout, /No review jobs/);
+});
+
+test('ALLOW passes for a checkout with changes', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  await f.write('app.js', 'changed\n');
   const output = await runHook(
     f,
     {},
@@ -154,6 +180,7 @@ test('continued turns and unrelated events skip reviews', async (t) => {
 test('failed or malformed reviews never pass', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
+  await f.write('app.js', 'changed\n');
   for (const env of [
     { FAKE_CLAUDE_MODE: 'fail' },
     { FAKE_CLAUDE_MODE: 'malformed' },
@@ -170,6 +197,7 @@ test('failed or malformed reviews never pass', async (t) => {
 test('gate settings are per worktree, shared by subdirectories', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
+  await f.write('app.js', 'changed\n');
   const worktree = join(f.root, 'other worktree');
   await f.git('worktree', 'add', '-b', 'other', worktree);
   assert.deepEqual(
@@ -199,6 +227,7 @@ test('non-Git directories skip and plain setup works', async (t) => {
 test('cancellation stops the gate and returns feedback', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
+  await f.write('app.js', 'changed\n');
   const pending = runHook(f, {}, { FAKE_CLAUDE_MODE: 'slow' });
   const id = await eventually(async () => {
     const status = (await f.run(['status'])).stdout;

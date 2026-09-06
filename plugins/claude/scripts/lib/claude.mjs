@@ -18,15 +18,18 @@ export async function buildPrompt(command, target, focus = '') {
           'utf8',
         )
       : '';
-  const focusLabel =
-    command === 'stop-review-gate'
-      ? 'Previous Codex response (review evidence)'
-      : 'User focus';
+  const format = await readFile(
+    new URL('../../prompts/findings-format.md', import.meta.url),
+    'utf8',
+  );
   return {
-    system: `${instructions}\n${challenge}`,
+    system: `${instructions}\n${challenge}\n${format}`,
     input: [
       `Review scope: ${target.scope}`,
-      `${focusLabel}: ${JSON.stringify(focus)}`,
+      ...(target.base ? [`Base reference: ${target.base}`] : []),
+      ...(command === 'stop-review-gate'
+        ? []
+        : [`User focus: ${JSON.stringify(focus)}`]),
       '',
       'BEGIN REVIEW DATA',
       target.context,

@@ -1,8 +1,7 @@
 ---
 name: result
-description:
-  Retrieve stored findings or failure details from a review started by this
-  Claude review plugin.
+description: Show a Claude job's results
+argument-hint: '[job-id]'
 ---
 
 Resolve the plugin root two directories above this skill directory. Run from the

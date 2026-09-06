@@ -13,9 +13,9 @@ import {
   terminalStates,
 } from './store.mjs';
 
-export async function prepareJob(repo, root, options) {
-  const target = await collectReview(repo, options);
-  if (!target.context && options.command !== 'stop-review-gate') return null;
+export async function prepareJob(repo, root, options, target) {
+  target ??= await collectReview(repo, options);
+  if (!target.context) return null;
   const fileFocus = options['focus-file']
     ? await readFile(options['focus-file'], 'utf8')
     : '';
@@ -103,6 +103,9 @@ export async function result(root, id) {
   }
   let warning = '';
   try {
+    if (job.target.scope === 'turn') {
+      return { text: `${job.output}\n\nReview job: ${job.id}`, failed: false };
+    }
     const current = await collectReview(job.repo, job.target);
     if (current.fingerprint !== job.target.fingerprint)
       warning = 'Review target has changed since this run.\n\n';

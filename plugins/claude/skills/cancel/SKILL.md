@@ -1,8 +1,7 @@
 ---
 name: cancel
-description:
-  Cancel a running job started by this Claude review plugin in the current Git
-  repository.
+description: Cancel an active Claude job
+argument-hint: '[job-id]'
 ---
 
 Resolve the plugin root two directories above this skill directory. Run from the

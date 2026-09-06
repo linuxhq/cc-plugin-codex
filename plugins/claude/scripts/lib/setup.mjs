@@ -28,7 +28,7 @@ export async function setup(options) {
     `Automatic review gate: ${enabled ? 'enabled' : 'disabled'} for ${repo}.`,
     ...(enabled
       ? [
-          'Codex must also trust the bundled Stop hook. Review it in /hooks; ' +
+          'Trust both UserPromptSubmit and Stop hooks in /hooks; ' +
             'start a new session after installing or updating the plugin.',
         ]
       : []),

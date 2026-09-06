@@ -1,8 +1,7 @@
 ---
 name: status
-description:
-  Show progress and recent jobs started by this Claude review plugin in the
-  current Git repository.
+description: Show active and recent Claude jobs
+argument-hint: '[job-id]'
 ---
 
 Resolve the plugin root two directories above this skill directory. Run from the

@@ -1,8 +1,7 @@
 ---
 name: setup
-description:
-  Check Claude Code readiness and enable or disable automatic reviews before
-  Codex finishes a turn in the current Git checkout.
+description: Check Claude setup and toggle reviews
+argument-hint: '[--enable-review-gate|--disable-review-gate]'
 ---
 
 Resolve the plugin root two directories above this skill directory. Run from the
@@ -22,19 +21,21 @@ Report the result. Setup does not start a paid review. If the executable is
 missing, point to `https://code.claude.com/docs/en/setup`. If authentication is
 missing, tell the user to run `claude auth login` in their terminal.
 
-The bundled Stop hook requires Codex hook support and user trust. When enabling,
-explain that the user must review and trust it in Codex's `/hooks` interface,
-and start a new session after installing or updating the plugin. Do not bypass
-hook trust or change Codex configuration. Enabling the plugin's gate setting
-alone does not establish that Codex loaded and trusted the hook.
+The bundled UserPromptSubmit and Stop hooks require Codex hook support and user
+trust. When enabling, explain that the user must review and trust both in
+Codex's `/hooks` interface, and start a new session after installing or updating
+the plugin. Do not bypass hook trust or change Codex configuration. Enabling the
+plugin's gate setting alone does not establish that Codex loaded and trusted the
+hook.
 
-Once enabled and trusted, the hook asks Claude to review the previous turn.
-BLOCK sends Codex back to assess the findings, automatically fix the issues it
-agrees with within the authorized scope, and run relevant checks. It explains
-rejected findings with evidence instead of blindly applying them, and reports
-fixes and validation before finishing. The hook skips a Stop-triggered
-continuation to prevent endless review loops; use `$claude:review` to verify
-fixes. Automatic reviews consume the local Claude account's usage and are
-visible through `$claude:status`, `$claude:result`, and `$claude:cancel`. A
-successful setup confirms local credentials exist; actual reviews can still fail
-due to provider, network, quota, or model availability errors.
+Once enabled and trusted, UserPromptSubmit saves a starting snapshot and Stop
+sends only the turn's Git diff to Claude. Unchanged turns skip Claude even with
+older uncommitted edits. Missing snapshots skip with an explanatory message.
+BLOCK sends Codex back with a short message saying issues still need fixes, the
+reviewer's first-line summary, and the review job ID. Full findings remain
+available through `$claude:result`. The hook skips a Stop-triggered continuation
+to prevent endless review loops; use `$claude:review` to verify fixes. Automatic
+reviews consume the local Claude account's usage and are visible through
+`$claude:status`, `$claude:result`, and `$claude:cancel`. A successful setup
+confirms local credentials exist; actual reviews can still fail due to provider,
+network, quota, or model availability errors.

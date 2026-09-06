@@ -1,8 +1,8 @@
 ---
 name: review
-description:
-  Run a read-only Claude Code review of local Git changes when the user asks for
-  a Claude review or a second opinion from Claude.
+description: Review Git changes with Claude
+argument-hint: >-
+  [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]
 ---
 
 Run the bundled CLI from the user's repository:

@@ -1,8 +1,9 @@
 ---
 name: adversarial-review
-description:
-  Ask Claude Code to challenge a change's design, assumptions, and failure modes
-  when the user requests adversarial scrutiny or a focused Claude review.
+description: Challenge code and design with Claude
+argument-hint: >-
+  [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [focus
+  ...]
 ---
 
 Run from the user's repository, resolving the plugin root two directories above
