@@ -1,18 +1,43 @@
 import { sensitive } from './repository-policy.mjs';
-import { resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { constants } from 'node:fs';
-import { open, readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { open, readdir, realpath, lstat } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { currentSessionId } from './status.mjs';
 
 const maxBytes = 8 * 1024 * 1024;
 
-export async function readContextFile(path) {
+export async function readContextFile(path, repo = process.cwd()) {
   if (sensitive.test(resolve(path)))
     throw new Error('Sensitive context paths are not allowed.');
+  const canonical = await realpath(path);
+  if (sensitive.test(canonical))
+    throw new Error('Sensitive context paths are not allowed.');
+  const roots = await Promise.all(
+    [repo, tmpdir(), process.env.CODEX_HOME || join(homedir(), '.codex')].map(
+      (root) => realpath(root).catch(() => resolve(root)),
+    ),
+  );
+  if (
+    !roots.some((root) => {
+      const rel = relative(root, canonical);
+      return (
+        rel &&
+        rel !== '..' &&
+        !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
+        !isAbsolute(rel)
+      );
+    })
+  )
+    throw new Error(
+      'Context must be inside the checkout, temporary ' +
+        'directory, or CODEX_HOME. Copy an intended summary there first.',
+    );
+  if ((await lstat(path)).isSymbolicLink())
+    throw new Error('Symlink context inputs are not allowed.');
   const file = await open(
-    path,
+    canonical,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   try {
@@ -38,10 +63,11 @@ export async function readContextFile(path) {
   }
 }
 
-export async function transferContext(options) {
-  if (options['prompt-file']) return readContextFile(options['prompt-file']);
+export async function transferContext(options, repo = process.cwd()) {
+  if (options['prompt-file'])
+    return readContextFile(options['prompt-file'], repo);
   const source = options.source || (await findTranscript());
-  return transcriptMessages(await readContextFile(source));
+  return transcriptMessages(await readContextFile(source, repo));
 }
 
 export function transcriptMessages(text) {

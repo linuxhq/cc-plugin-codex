@@ -53,21 +53,6 @@ export async function runGate(input) {
 
 async function enabledGate(repo, root, input) {
   const snapshot = await gateSnapshot(repo);
-  const reviewed =
-    input.session_id &&
-    snapshot &&
-    (await sessionJobs(root, input.session_id)).some(
-      (job) =>
-        job.command === 'adversarial-review' &&
-        job.state === 'completed' &&
-        job.reviewSnapshot === snapshot,
-    );
-  if (reviewed)
-    return {
-      systemMessage:
-        'Claude automatic review skipped: repository unchanged since the ' +
-        'completed adversarial review in this session.',
-    };
   if (await reuseGateSnapshot(root, input.session_id, snapshot))
     return {
       systemMessage:

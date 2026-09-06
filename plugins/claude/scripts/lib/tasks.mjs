@@ -23,12 +23,12 @@ export async function resumeCandidate(root) {
     : { available: false };
 }
 
-export async function prepareTask(root, options) {
+export async function prepareTask(root, options, repo = process.cwd()) {
   const input =
     options.command === 'transfer'
-      ? await transferContext(options)
+      ? await transferContext(options, repo)
       : options['prompt-file']
-        ? await readContextFile(options['prompt-file'])
+        ? await readContextFile(options['prompt-file'], repo)
         : options.focus;
   if (!input?.trim()) throw new Error('Provide a nonempty task or context.');
   const resumeSessionId = await resolveResume(root, options);
@@ -40,7 +40,9 @@ export async function prepareTask(root, options) {
           'Acknowledge receipt briefly; do not use tools or perform work.'
         : 'Carry out the user task within its requested scope. ' +
           (options.write
-            ? 'You may edit files and run shell commands and tests. ' +
+            ? 'Use the repository write tool to edit files. Shell commands ' +
+              'and tests are unavailable; report validation ' +
+              'the caller must run. ' +
               'Preserve unrelated work. Do not publish, push, deploy, or ' +
               'contact external services unless the task authorizes it. '
             : 'Investigate using read-only repository inspection. ' +

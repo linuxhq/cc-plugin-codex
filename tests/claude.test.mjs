@@ -6,7 +6,10 @@ import {
 } from '../plugins/claude/scripts/lib/claude.mjs';
 
 test('only grants the private repository tool and disables hooks', () => {
-  const args = claudeArgs({ repo: '/repo', prompt: { system: 'review' } });
+  const args = claudeArgs({
+    repo: '/repo',
+    prompt: { system: 'review', input: 'Review the repository.' },
+  });
   const option = (name) => args[args.indexOf(name) + 1];
   assert.equal(option('--tools'), '');
   assert.equal(option('--allowedTools'), 'mcp__repository__inspect');

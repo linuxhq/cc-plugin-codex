@@ -58,10 +58,15 @@ test('rescue persistence and explicit write access', async (t) => {
   capture = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   assert.equal(option('--resume'), saved.job.claudeSessionId);
   assert.ok(capture.args.includes('--fork-session'));
-  assert.equal(option('--tools'), 'Read,Glob,Grep,Edit,Write,Bash');
+  assert.equal(option('--tools'), '');
+  assert.equal(
+    option('--allowedTools'),
+    'mcp__repository__inspect,mcp__repository__write',
+  );
+  assert.ok(!capture.args.includes('--settings'));
   assert.equal(option('--permission-mode'), 'dontAsk');
   assert.ok(!capture.args.includes('--dangerously-skip-permissions'));
-  assert.deepEqual(JSON.parse(option('--mcp-config')), { mcpServers: {} });
+  assert.ok(JSON.parse(option('--mcp-config')).mcpServers.repository);
   const nextJob = JSON.parse(next.stdout).job;
   assert.notEqual(nextJob.claudeSessionId, saved.job.claudeSessionId);
   const third = await f.run(['rescue', '--resume', '--json', 'inspect fix']);
@@ -344,4 +349,34 @@ test('worker death kills writers and retains the lock', async (t) => {
     (await f.run(['rescue', '--write', 'next'])).stdout,
     /Another write job/,
   );
+});
+
+test('large background prompts arrive and are cleaned up', async (t) => {
+  const f = await fixture(t);
+  const input = join(f.root, 'large-task.txt');
+  const text = 'investigate\n'.repeat(100_000);
+  await writeFile(input, text);
+  const launch = await f.run([
+    'rescue',
+    '--background',
+    '--prompt-file',
+    input,
+  ]);
+  assert.equal(launch.code, 0, launch.stderr);
+  const id = extractId(launch.stdout);
+  await eventually(async () => {
+    const report = JSON.parse((await f.run(['status', id, '--json'])).stdout);
+    return report.job.state === 'completed';
+  });
+  const capture = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+  assert.equal(capture.input, text);
+  const { fingerprint } = await import('../plugins/claude/scripts/lib/git.mjs');
+  const payload = join(
+    f.env.CLAUDE_REVIEW_DATA_DIR,
+    'jobs',
+    fingerprint(f.repo).slice(0, 24),
+    id,
+    'prompt.json',
+  );
+  await assert.rejects(readFile(payload), { code: 'ENOENT' });
 });

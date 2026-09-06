@@ -1,12 +1,11 @@
-import { gateSnapshot } from './gate-snapshot.mjs';
 import { renderGateResult } from './gate-output.mjs';
 import { randomUUID } from 'node:crypto';
 import { persistentCommands, prepareTask } from './tasks.mjs';
 import { spawn } from 'node:child_process';
-import { open, writeFile } from 'node:fs/promises';
+import { open, rm, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { buildPrompt } from './claude.mjs';
-import { collectReview, git } from './git.mjs';
+import { collectReview } from './git.mjs';
 import {
   active,
   currentSessionId,
@@ -23,21 +22,15 @@ import {
 } from './store.mjs';
 
 export async function prepareJob(repo, root, options, target) {
-  let reviewSnapshot =
-    options.command === 'adversarial-review'
-      ? await gateSnapshot(repo)
-      : undefined;
   const persistent = persistentCommands.includes(options.command);
-  const task = persistent ? await prepareTask(root, options) : null;
+  const task = persistent ? await prepareTask(root, options, repo) : null;
   target ??= persistent
     ? { scope: options.command }
     : await collectReview(repo, options);
-  reviewSnapshot = await scopedSnapshot(repo, target, reviewSnapshot);
   const prompt =
     task?.prompt || (await buildPrompt(options.command, target, options.focus));
   const job = await createJob(root, {
     repo,
-    ...(options.command === 'adversarial-review' ? { reviewSnapshot } : {}),
     command: options.command,
     sessionId: options.sessionId || currentSessionId(),
     model: options.model,
@@ -61,21 +54,22 @@ export async function prepareJob(repo, root, options, target) {
 
 export async function launchBackground(root, job) {
   const log = await open(jobPath(root, job.id, 'worker.log'), 'a', 0o600);
+  const payload = jobPath(root, job.id, 'prompt.json');
   try {
+    await writeFile(payload, JSON.stringify(job.prompt), {
+      mode: 0o600,
+      flag: 'wx',
+    });
     const worker = fileURLToPath(new URL('../worker.mjs', import.meta.url));
     const child = spawn(process.execPath, [worker, root, job.id], {
       cwd: job.repo,
       detached: true,
-      stdio: ['pipe', log.fd, log.fd],
+      stdio: ['ignore', log.fd, log.fd, 'ipc'],
     });
-    await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('spawn', resolve);
-    });
-    child.stdin.on('error', () => {});
-    child.stdin.end(JSON.stringify(job.prompt));
+    await acknowledgeWorker(child);
     child.unref();
   } catch (error) {
+    await rm(payload, { force: true });
     await saveJob(root, { ...job, state: 'failed', error: error.message });
     throw error;
   } finally {
@@ -171,12 +165,37 @@ export async function result(root, id) {
   };
 }
 
-async function scopedSnapshot(repo, target, reviewSnapshot) {
-  if (
-    target.scope === 'branch' &&
-    reviewSnapshot &&
-    (await git(repo, ['status', '--porcelain=v1', '--untracked-files=all']))
-  )
-    reviewSnapshot = null;
-  return reviewSnapshot;
+function acknowledgeWorker(child) {
+  return new Promise((resolve, reject) => {
+    const finish = (error) => {
+      clearTimeout(timer);
+      child.removeListener('error', fail);
+      child.removeListener('exit', exited);
+      child.removeListener('message', received);
+      if (child.connected) child.disconnect();
+      if (error) {
+        child.kill();
+        reject(error);
+      } else resolve();
+    };
+    const fail = (error) => finish(error);
+    const exited = () =>
+      fail(new Error('Worker exited before prompt receipt.'));
+    const received = (message) =>
+      message?.ready
+        ? finish()
+        : fail(new Error(message?.error || 'Prompt delivery failed.'));
+    const timer = setTimeout(
+      () =>
+        fail(
+          new Error(
+            'Worker did not acknowledge prompt receipt within 10 seconds.',
+          ),
+        ),
+      10_000,
+    );
+    child.once('error', fail);
+    child.once('exit', exited);
+    child.once('message', received);
+  });
 }

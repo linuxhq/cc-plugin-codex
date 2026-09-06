@@ -185,7 +185,7 @@ cancel [JOB_ID]
 All commands accept --cwd PATH (-C) and --json (except help).
 Reviews, rescue, and transfer accept --model MODEL (-m) and --effort LEVEL.
 Effort levels: low, medium, high, xhigh, max (model support varies).
-Rescue is read-only unless --write authorizes edits and shell commands.
+Rescue is read-only unless --write authorizes repository text edits.
 Resume forks the saved conversation; transfer seeds a persistent session.
 Defaults: foreground, Claude's configured defaults, auto scope.
 Auto reviews local changes when dirty, otherwise the branch against its base.

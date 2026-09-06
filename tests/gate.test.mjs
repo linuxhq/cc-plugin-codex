@@ -583,22 +583,21 @@ test('finished gates remove prompts and retain metrics', async (t) => {
   assert.equal(job.metrics.costUsd, 0.01);
 });
 
-test('adversarial findings suppress unchanged duplicate gates', async (t) => {
+test('adversarial findings cannot suppress unchanged gates', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
   await f.write('app.js', 'changed');
   const review = await f.run(['adversarial-review']);
   assert.equal(review.code, 0, review.stderr);
   await rm(f.env.FAKE_CLAUDE_CAPTURE);
-  const skipped = JSON.parse((await runHook(f)).stdout);
-  assert.match(skipped.systemMessage, /completed adversarial review/);
-  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
   const env = {
     FAKE_CLAUDE_OUTPUT: JSON.stringify({
       decision: 'ALLOW',
       reason: 'Checked',
     }),
   };
+  assert.deepEqual(JSON.parse((await runHook(f, {}, env)).stdout), {});
+  assert.ok(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   assert.deepEqual(
     JSON.parse((await runHook(f, { session_id: 'other-session' }, env)).stdout),
     {},

@@ -45,8 +45,8 @@ export async function buildPrompt(command, target, focus = '') {
 }
 
 export function claudeArgs(job) {
-  if (job.command === 'transfer' || (job.command === 'rescue' && job.write))
-    return taskArgs(job);
+  validatePrompt(job.prompt);
+  if (job.command === 'transfer') return taskArgs(job);
   const args = [
     '--print',
     '--output-format',
@@ -56,7 +56,9 @@ export function claudeArgs(job) {
     '--tools',
     '',
     '--allowedTools',
-    'mcp__repository__inspect',
+    job.write
+      ? 'mcp__repository__inspect,mcp__repository__write'
+      : 'mcp__repository__inspect',
     '--permission-mode',
     'dontAsk',
     '--strict-mcp-config',
@@ -68,15 +70,15 @@ export function claudeArgs(job) {
           args: [
             fileURLToPath(new URL('../repository-server.mjs', import.meta.url)),
             job.repo,
-            ...(job.inspectionAudit ? [job.inspectionAudit] : []),
+            job.inspectionAudit || '',
+            ...(job.write ? [job.recovery] : []),
           ],
         },
       },
     }),
     '--setting-sources',
     'user',
-    '--settings',
-    '{"disableAllHooks":true}',
+    ...(job.write ? [] : ['--settings', '{"disableAllHooks":true}']),
     '--disable-slash-commands',
     '--system-prompt',
     job.prompt.system +
@@ -105,8 +107,6 @@ function addPersistence(args, job) {
 }
 
 function taskArgs(job) {
-  const tools =
-    job.command === 'transfer' ? '' : 'Read,Glob,Grep,Edit,Write,Bash';
   const args = [
     '--print',
     '--output-format',
@@ -114,7 +114,7 @@ function taskArgs(job) {
     '--verbose',
     '--include-partial-messages',
     '--tools',
-    tools,
+    '',
     '--permission-mode',
     'dontAsk',
     '--strict-mcp-config',
@@ -128,7 +128,6 @@ function taskArgs(job) {
     '--append-system-prompt',
     job.prompt.system,
   ];
-  if (tools) args.push('--allowedTools', tools);
   if (job.model) args.push('--model', job.model);
   if (job.effort) args.push('--effort', job.effort);
   addPersistence(args, job);
@@ -275,4 +274,14 @@ export async function checkSetup() {
     'Authentication ready. Reviews use your local Claude account.',
     '',
   ].join('\n');
+}
+
+export function validatePrompt(prompt) {
+  if (
+    !prompt ||
+    typeof prompt.system !== 'string' ||
+    typeof prompt.input !== 'string' ||
+    !prompt.input.trim()
+  )
+    throw new Error('Task prompt was not delivered or is invalid.');
 }

@@ -1,7 +1,6 @@
 import { acquireWriteGuard } from './write-guard.mjs';
-import { gateSnapshot } from './gate-snapshot.mjs';
 import { writeFile } from 'node:fs/promises';
-import { reviewWithClaude } from './claude.mjs';
+import { reviewWithClaude, validatePrompt } from './claude.mjs';
 import { exists, jobPath, loadJob, saveJob, terminalStates } from './store.mjs';
 import { saveProgress, updateProgress } from './progress.mjs';
 
@@ -22,18 +21,18 @@ export async function executeJob(root, id, { prompt } = {}) {
   const stopMonitor = monitor(root, id, controller, () => progress);
   let releaseWrite;
   try {
+    if (prompt) job.prompt = prompt;
+    validatePrompt(job.prompt);
     if (job.write) releaseWrite = await acquireWriteGuard(root, job);
     if (await exists(jobPath(root, id, 'cancel'))) controller.abort();
     if (controller.signal.aborted) throw new Error('Review cancelled.');
     job.state = 'running';
     job.startedAt = new Date().toISOString();
     await saveJob(root, job);
-    if (prompt) job.prompt = prompt;
     job.output = await reviewWithClaude(job, controller.signal, (update) => {
       progress = updateProgress(progress, update);
     });
     job.state = controller.signal.aborted ? 'cancelled' : 'completed';
-    await validateReviewSnapshot(job);
   } catch (error) {
     job.state = controller.signal.aborted ? 'cancelled' : 'failed';
     job.error = error.message;
@@ -74,14 +73,6 @@ function monitor(root, id, controller, progress) {
     clearTimeout(timer);
     await pending;
   };
-}
-
-async function validateReviewSnapshot(job) {
-  if (
-    job.command === 'adversarial-review' &&
-    job.reviewSnapshot !== (await gateSnapshot(job.repo))
-  )
-    delete job.reviewSnapshot;
 }
 
 function discardPrompt(job) {

@@ -7,7 +7,7 @@ conversation to a persistent Claude session.
 
 Reviews use your local Claude account and count toward its usage limits. Review
 commands can read code, but cannot edit files or run tests. Rescue tasks can
-edit and run shell commands when explicitly authorized with `--write`.
+edit repository text files when explicitly authorized with `--write`.
 
 ## Get started
 
@@ -137,20 +137,20 @@ Claude's configured default.
 
 ## Delegate work and continue sessions
 
-Use rescue to ask Claude to investigate a problem. Add `--write` for edits and
-shell commands, including tests:
+Use rescue to ask Claude to investigate a problem. Add `--write` for edits; the
+calling agent runs any required tests after reviewing the changes:
 
 ```text
 $claude:rescue --wait investigate why the cache is stale
-$claude:rescue --background --write fix the cache bug and run its tests
+$claude:rescue --background --write fix the cache bug and identify required tests
 $claude:rescue --resume --write apply the follow-up fix
 $claude:rescue --fresh investigate a different problem
 $claude:rescue --resume-job JOB_ID continue that investigation
 ```
 
 Read-only rescue uses the same repository inspection tool as reviews. Write mode
-grants file and shell tools; the task should state the authorized scope. It does
-not enable permission bypass or authorize publishing and deployment. Rescue
+adds a repository-confined text editing tool; the task should state the
+authorized scope. Shell commands and test execution are unavailable. Rescue
 defaults to foreground. Model and effort are inherited from Claude unless
 supplied explicitly. `--prompt-file PATH` accepts multiline task text without
 shell interpolation and cannot be combined with positional task text.
@@ -168,12 +168,22 @@ status include `claude --resume SESSION_ID` for interactive continuation from
 that checkout.
 
 Write jobs take a per-checkout lock and record Git status before and after
-execution in a private `recovery.json` alongside the job. Cancellation and
-worker death terminate the supervised reviewer process group. Interrupted jobs
-report possible partial edits; after a hard worker crash the lock is retained
-until its processes and working tree have been inspected. This lock coordinates
-plugin writers, not external editors. Recovery records are status inventories,
-not file backups; edits are not automatically reverted.
+execution in a private `recovery.json` alongside the job. Before each file's
+first edit, the tool saves its original UTF-8 content and mode in a private
+`backups/` directory beside that record. Each JSON backup includes the relative
+`path`, original `text`, and `mode`; `text: null` records a newly created file.
+To recover, first stop the job and inspect the current changes, then restore
+selected files from those records (or remove files whose original text was
+null). Backups preserve dirty and untracked contents. Edits are not
+automatically reverted, and backups follow the job retention policy below.
+
+Cancellation and worker death terminate the supervised reviewer process group.
+Write jobs are rejected on Windows, where this supervision is unavailable.
+Interrupted jobs report possible partial edits; after a hard worker crash the
+lock is retained until its processes and working tree have been inspected.
+Release verifies lock ownership, and edits also require the owning token. This
+lock coordinates plugin writers; external editors must not mutate paths or
+manually replace locks while a writer is active.
 
 ## Hand off to Claude Code
 
@@ -235,11 +245,9 @@ After an ALLOW, unchanged repository state in the same session can skip the
 model call with a notice. The check hashes HEAD, index entries, and tracked and
 untracked file contents before and after review. A failed or blocked attempt
 invalidates the cached state. A new session, submodules, missing HEAD, or a
-snapshot exceeding its 32 MiB/5-second file budget uses a fresh review. A
-completed adversarial review also suppresses the duplicate Stop review for the
-unchanged state in the same session, even when it reports findings. Failed
-reviews, edits during or after review, and branch-only reviews with local
-changes do not qualify.
+snapshot exceeding its 32 MiB/5-second file budget uses a fresh review.
+Adversarial reviews never suppress the Stop gate: their verdicts and focused
+review scopes do not establish an ALLOW for the previous Codex response.
 
 ## Privacy and storage
 
@@ -255,11 +263,17 @@ user settings for credentials and model defaults. It doesn't load project or
 local Claude settings. These are tool restrictions, not an operating-system
 sandbox; source changes included in prompts may contain secrets.
 
-Rescue write mode instead enables Read, Glob, Grep, Edit, Write, and Bash, with
-other MCP servers and hooks disabled. Rescue and transfer sessions persist in
-Claude's own session storage; plugin records retain results and session IDs.
-Plugin retention does not remove those Claude transcripts. Transferred context
-can contain source code and other conversation text.
+Rescue write mode uses the same secret-filtered inspection tool and adds a
+repository text editing tool. Built-in file and shell tools remain disabled;
+user hooks remain enabled. Writes reject ignored files, sensitive paths,
+symlinks, and paths outside the checkout, and require the exact expected current
+content before replacement. Parent directories must already exist. These checks
+are not an OS sandbox against concurrent external filesystem changes. Run tests
+through the calling agent or an interactive session after inspecting edits.
+Rescue and transfer sessions persist in Claude's own session storage; plugin
+records retain results and session IDs. Plugin retention does not remove those
+Claude transcripts. Transferred context can contain source code and other
+conversation text.
 
 Review data is stored outside your checkout with private file permissions:
 
@@ -272,12 +286,16 @@ The data may contain source code. Before creating each job, the runtime prunes
 finished jobs older than 30 days and keeps at most 100 finished jobs per
 checkout. Active jobs are preserved. Gate prompts are passed in memory and never
 saved to the job store. Rescue and transfer prompts also stay out of job
-records; background workers receive them through a pipe. Context inputs reject
-common secret filenames and symlinks, but content is not automatically redacted.
-Review what you send; output and Claude transcripts may quote it. Completed jobs
-retain findings, elapsed time and provider usage/cost when supplied. Manual
-review prompts remain until their jobs are pruned. Set `CLAUDE_REVIEW_DATA_DIR`
-to use another location.
+records. Background launch saves a private 0600 prompt file and waits for the
+worker to read, validate, delete, and acknowledge it. Delivery failures are
+reported as failed jobs; a launcher crash before delivery can leave the private
+file until job cleanup. Context inputs must resolve inside the checkout, the
+system temporary directory, or `CODEX_HOME`; common credential paths and direct
+symlinks are rejected. Content is not automatically redacted. Review what you
+send; output and Claude transcripts may quote it. Completed jobs retain
+findings, elapsed time and provider usage/cost when supplied. Manual review
+prompts remain until their jobs are pruned. Set `CLAUDE_REVIEW_DATA_DIR` to use
+another location.
 
 <details>
 <summary>Runtime details</summary>

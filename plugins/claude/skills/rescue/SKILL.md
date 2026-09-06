@@ -23,10 +23,11 @@ runs should be polled through completion. Return Claude's result verbatim,
 including continuation commands and failures.
 
 Investigations default to read-only repository inspection. Add `--write` when
-the user's task authorizes edits or running shell commands/tests. This grants
-Claude file and shell tools in the checkout; it does not authorize publishing,
-deploying, or unrelated actions. Carry those scope limits into the task text. Do
-not enable write access merely to get a more thorough read-only review.
+the user's task authorizes edits. This grants repository-confined text editing
+with original-content backups and keeps user hooks enabled. It does not grant
+shell or test execution; include required validation in the handoff result for
+the calling agent to run. Existing parent directories are required. Write mode
+is unavailable on Windows. Carry the authorized scope into the task text.
 
 Preserve explicit `--model` and `--effort` values; otherwise leave them unset.
 Effort levels are low, medium, high, xhigh, and max, subject to model support.
