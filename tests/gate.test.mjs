@@ -384,6 +384,7 @@ test('gate running-job notices prefer the hook session', async (t) => {
 
 test('automatic review leaves time inside the hook deadline', async () => {
   const config = JSON.parse(await readFile(join(plugin, 'hooks/hooks.json')));
+  assert.ok(gateReviewTimeout <= 120_000);
   assert.ok(
     gateReviewTimeout + 60_000 < config.hooks.Stop[0].hooks[0].timeout * 1000,
   );
@@ -421,14 +422,19 @@ test('terminating the hook terminates its running reviewer', async (t) => {
 test('missing or failed inspection cannot be reported as ALLOW', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
-  for (const mode of ['no-inspection', 'inspection-failed']) {
+  for (const [mode, verdict] of [
+    ['no-inspection', 'ALLOW'],
+    ['no-inspection', 'SKIP'],
+    ['inspection-failed', 'ALLOW'],
+    ['inspection-failed', 'SKIP'],
+  ]) {
     const output = await runHook(
       f,
       {},
       {
         FAKE_CLAUDE_MODE: mode,
         FAKE_CLAUDE_OUTPUT: JSON.stringify({
-          decision: 'ALLOW',
+          decision: verdict,
           reason: 'Fine',
         }),
       },
@@ -464,14 +470,13 @@ test('failed inspection preserves non-approval verdicts', async (t) => {
   }
 });
 
-test('SKIP needs no inspection and renders readable results', async (t) => {
+test('SKIP requires inspection and renders readable results', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
   const output = await runHook(
     f,
     { last_assistant_message: 'Status only.' },
     {
-      FAKE_CLAUDE_MODE: 'no-inspection',
       FAKE_CLAUDE_OUTPUT: JSON.stringify({
         decision: 'SKIP',
         reason: 'No code edits need review.',
@@ -496,4 +501,84 @@ test('continued turns respect disabled gates and non-repos', async (t) => {
     (await runHook(f, { stop_hook_active: true })).stdout,
   );
   assert.doesNotMatch(output.systemMessage, /continued Stop/);
+});
+
+test('successful inspection recovers from a tool mistake', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  const output = await runHook(
+    f,
+    {},
+    {
+      FAKE_CLAUDE_MODE: 'inspection-recovered',
+      FAKE_CLAUDE_OUTPUT: JSON.stringify({
+        decision: 'ALLOW',
+        reason: 'Checked',
+      }),
+    },
+  );
+  assert.deepEqual(JSON.parse(output.stdout), {});
+});
+
+test('cache checks approval, files and session', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  const env = {
+    FAKE_CLAUDE_OUTPUT: JSON.stringify({
+      decision: 'ALLOW',
+      reason: 'Checked',
+    }),
+  };
+  assert.deepEqual(JSON.parse((await runHook(f, {}, env)).stdout), {});
+  await rm(f.env.FAKE_CLAUDE_CAPTURE);
+  const skipped = JSON.parse((await runHook(f, {}, env)).stdout);
+  assert.match(skipped.systemMessage, /unchanged/);
+  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
+  for (const change of [
+    () => f.write('app.js', 'changed\n'),
+    () => f.git('add', '.'),
+    () => f.git('commit', '-m', 'changed'),
+    () => f.write('new.js', 'first'),
+    () => f.write('new.js', 'other'),
+  ]) {
+    await change();
+    assert.deepEqual(JSON.parse((await runHook(f, {}, env)).stdout), {});
+  }
+  assert.deepEqual(
+    JSON.parse((await runHook(f, { session_id: 'other-session' }, env)).stdout),
+    {},
+  );
+  await f.write('app.js', 'broken');
+  const failed = { FAKE_CLAUDE_MODE: 'no-inspection', ...env };
+  for (let attempt = 0; attempt < 2; attempt++)
+    assert.match(
+      JSON.parse((await runHook(f, {}, failed)).stdout).systemMessage,
+      /could not complete/,
+    );
+});
+
+test('finished gates remove prompts and retain metrics', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  await runHook(
+    f,
+    {},
+    {
+      FAKE_CLAUDE_OUTPUT: JSON.stringify({
+        decision: 'ALLOW',
+        reason: 'Checked',
+      }),
+    },
+  );
+  const root = join(
+    f.env.CLAUDE_REVIEW_DATA_DIR,
+    'jobs',
+    fingerprint(f.repo).slice(0, 24),
+  );
+  const id = (await readdir(root)).find((name) => name.startsWith('review-'));
+  const job = JSON.parse(await readFile(join(root, id, 'job.json')));
+  assert.equal(job.prompt, undefined);
+  assert.ok(job.elapsedMs >= 0);
+  assert.equal(job.metrics.durationMs, 123);
+  assert.equal(job.metrics.costUsd, 0.01);
 });

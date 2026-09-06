@@ -164,7 +164,7 @@ test('large index does not prevent listing or individual reads', async (t) => {
   );
 });
 
-test('large diffs stream and long lines truncate', async (t) => {
+test('large diffs stream and long lines have continuations', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', ('a'.repeat(80) + '\n').repeat(40000));
   const diff = await repo.inspectRepository(f.repo, {
@@ -188,9 +188,10 @@ test('large diffs stream and long lines truncate', async (t) => {
       },
     },
   );
-  assert.match(read, /truncated .* bytes on line 1/);
+  assert.match(read, /continued: .* bytes remain/);
+  assert.match(read, /next offset 0; next byteOffset/);
   assert.ok(Buffer.byteLength(read) < 257 * 1024);
-  assert.equal(incomplete, true);
+  assert.equal(incomplete, false);
   assert.match(
     await repo.inspectRepository(f.repo, {
       operation: 'read',
@@ -236,4 +237,59 @@ test('page boundaries defer whole lines without truncation', async (t) => {
   assert.ok(next.includes(second));
   assert.match(next, /next offset 2/);
   assert.equal(incomplete, false);
+});
+
+test('UTF-8 continuations reconstruct long lines exactly', async (t) => {
+  const f = await fixture(t);
+  const original = '🙂abé'.repeat(90000);
+  await f.write('app.js', original + '\nend\n');
+  let byteOffset = 0;
+  let reconstructed = '';
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const page = await repo.inspectRepository(f.repo, {
+      operation: 'read',
+      path: 'app.js',
+      offset: 0,
+      byteOffset,
+      limit: 1,
+    });
+    reconstructed += page
+      .split('\n')[0]
+      .replace(/^1: /, '')
+      .replace(/ \[continued: \d+ bytes remain\]$/, '');
+    const cursor = /next byteOffset (\d+)/.exec(page);
+    if (!cursor) break;
+    assert.ok(Number(cursor[1]) > byteOffset);
+    byteOffset = Number(cursor[1]);
+  }
+  assert.equal(reconstructed, original);
+});
+
+test('MCP audit records recovery after an invalid tool request', async (t) => {
+  const f = await fixture(t);
+  const server = fileURLToPath(
+    new URL('../plugins/claude/scripts/repository-server.mjs', import.meta.url),
+  );
+  const audit = join(f.root, 'audit.json');
+  const requests = [
+    { operation: 'read', path: 'missing.js' },
+    { operation: 'read', path: 'app.js' },
+  ].map((arguments_, id) =>
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id,
+      method: 'tools/call',
+      params: {
+        name: 'inspect',
+        arguments: arguments_,
+      },
+    }),
+  );
+  await runProcess(process.execPath, [server, f.repo, audit], {
+    input: requests.join('\n') + '\n',
+  });
+  assert.deepEqual(JSON.parse(await readFile(audit)), {
+    successes: 1,
+    failures: 1,
+  });
 });

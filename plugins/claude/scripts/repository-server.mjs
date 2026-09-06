@@ -53,15 +53,11 @@ for await (const line of lines) {
 }
 
 async function callTool(input) {
-  let incomplete = false;
   try {
-    const text = await inspectRepository(repo, input, {
-      onIncomplete() {
-        incomplete = true;
-      },
-    });
-    if (incomplete) evidence.failures++;
-    else evidence.successes++;
+    const text = await inspectRepository(repo, input);
+    // Tool mistakes are reported to the reviewer, not permanent vetoes.
+    // Bounded pages contain explicit continuation instructions.
+    evidence.successes++;
     await saveEvidence();
     return { content: [{ type: 'text', text }] };
   } catch (error) {

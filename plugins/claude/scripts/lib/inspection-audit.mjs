@@ -12,17 +12,15 @@ export async function withInspectionAudit(job, review) {
       mode: 0o600,
     });
     const output = await review({ ...job, inspectionAudit: audit });
-    // Audit approval only; missing evidence must never erase blocking findings
-    // or the reviewer's explanation of why inspection was skipped/incomplete.
-    if (JSON.parse(output)?.decision !== 'ALLOW') return output;
+    // Require evidence for every passing verdict; preserve blocking findings
+    // and explicit explanations of incomplete reviews.
+    if (!['ALLOW', 'SKIP'].includes(JSON.parse(output)?.decision))
+      return output;
     const evidence = JSON.parse(await readFile(audit, 'utf8'));
-    if (evidence.successes > 0 && evidence.failures === 0) return output;
+    if (evidence.successes > 0) return output;
     return JSON.stringify({
       decision: 'INCOMPLETE',
-      reason:
-        evidence.failures > 0
-          ? 'Repository inspection failed or returned truncated evidence.'
-          : 'No successful repository inspection was recorded.',
+      reason: 'No successful repository inspection was recorded.',
     });
   } finally {
     await rm(directory, { recursive: true, force: true });

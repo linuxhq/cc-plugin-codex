@@ -90,12 +90,14 @@ export function claudeArgs(job) {
   return args;
 }
 
-export const gateReviewTimeout = 10 * 60 * 1000;
+export const gateReviewTimeout = 2 * 60 * 1000;
 
 export async function reviewWithClaude(job, signal, onProgress) {
-  return withInspectionAudit(job, (request) =>
-    executeReview(request, signal, onProgress),
-  );
+  return withInspectionAudit(job, async (request) => {
+    const output = await executeReview(request, signal, onProgress);
+    job.metrics = request.metrics;
+    return output;
+  });
 }
 
 async function executeReview(job, signal, onProgress) {
@@ -108,12 +110,19 @@ async function executeReview(job, signal, onProgress) {
     captureStdout: false,
     onStdout: stream.write,
   });
-  const output = parseResult(stream.finish(), {
+  const raw = stream.finish();
+  const output = parseResult(raw, {
     ...result,
     structured: ['adversarial-review', 'stop-review-gate'].includes(
       job.command,
     ),
   });
+  const usage = JSON.parse(raw);
+  job.metrics = {
+    durationMs: usage.duration_ms,
+    costUsd: usage.total_cost_usd,
+    usage: usage.usage,
+  };
   if (job.command === 'adversarial-review') {
     const rendered = renderAdversarial(output, job.target);
     job.structuredOutput = JSON.parse(output);

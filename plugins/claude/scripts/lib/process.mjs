@@ -45,9 +45,6 @@ export function runProcess(command, args, options = {}) {
     child.stdin.on('error', (error) => {
       if (error.code !== 'EPIPE') stop(error);
     });
-    child.on('error', (error) => {
-      failure = error;
-    });
     const abort = () => stop(new Error('Review cancelled.'));
     const timer =
       timeout === null
@@ -55,13 +52,15 @@ export function runProcess(command, args, options = {}) {
         : setTimeout(() => stop(new Error('Subprocess timed out.')), timeout);
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
-    child.on('close', (code) => {
+    const finish = (error, code) => {
       clearTimeout(timer);
       clearTimeout(killTimer);
       signal?.removeEventListener('abort', abort);
-      if (failure) reject(failure);
+      if (error) reject(error);
       else resolve({ code, stdout, stderr });
-    });
+    };
+    child.once('error', (error) => finish(error));
+    child.once('close', (code) => finish(failure, code));
     child.stdin.end(input);
   });
 }

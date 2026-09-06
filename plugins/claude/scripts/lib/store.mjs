@@ -4,6 +4,7 @@ import {
   readFile,
   readdir,
   rename,
+  rm,
   writeFile,
   stat,
 } from 'node:fs/promises';
@@ -41,6 +42,7 @@ export async function createJob(root, details) {
     state: 'queued',
     createdAt: new Date().toISOString(),
   };
+  await pruneJobs(root);
   await mkdir(join(root, job.id), { recursive: true, mode: 0o700 });
   await saveJob(root, job);
   return job;
@@ -69,9 +71,19 @@ export async function listJobs(root) {
   const jobs = await Promise.all(
     entries
       .filter((id) => /^review-[a-f0-9-]{36}$/.test(id))
-      .map((id) => loadJob(root, id)),
+      .map(async (id) => {
+        try {
+          return await loadJob(root, id);
+        } catch (error) {
+          // A concurrent creator may have pruned this finished job.
+          if (error.cause?.code === 'ENOENT') return null;
+          throw error;
+        }
+      }),
   );
-  return jobs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return jobs
+    .filter(Boolean)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
 export async function resolveJob(root, reference) {
@@ -110,4 +122,20 @@ export async function jobState(root, job) {
   if (Date.now() - lastSeen > 30_000) return 'interrupted';
   if (await exists(jobPath(root, job.id, 'cancel'))) return 'cancelling';
   return job.state;
+}
+
+// Keep active jobs regardless of age. Run before each new job is created.
+export async function pruneJobs(
+  root,
+  { maxCount = 100, maxAgeDays = 30 } = {},
+) {
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+  const finished = (await listJobs(root)).filter((job) =>
+    terminalStates.includes(job.state),
+  );
+  for (const [index, job] of finished.entries()) {
+    const ended = Date.parse(job.finishedAt || job.createdAt);
+    if (index >= maxCount || ended < cutoff)
+      await rm(join(root, job.id), { recursive: true, force: true });
+  }
 }

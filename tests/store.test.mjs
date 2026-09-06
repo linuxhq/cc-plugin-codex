@@ -7,6 +7,8 @@ import {
   jobPath,
   jobState,
   loadJob,
+  listJobs,
+  pruneJobs,
   saveJob,
   storeRoot,
 } from '../plugins/claude/scripts/lib/store.mjs';
@@ -38,4 +40,28 @@ test('terminal states take precedence over stale heartbeats', async (t) => {
 
 test('separate checkouts receive separate job stores', () => {
   assert.notEqual(storeRoot('/repo'), storeRoot('/repo-worktree'));
+});
+
+test('retention prunes finished jobs and preserves active jobs', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const active = await createJob(root, { repo: f.repo });
+  const finished = [];
+  for (let i = 0; i < 4; i++) {
+    const job = await createJob(root, { repo: f.repo });
+    job.state = 'completed';
+    job.createdAt = new Date(Date.now() - i * 1000).toISOString();
+    await saveJob(root, job);
+    finished.push(job);
+  }
+  await pruneJobs(root, { maxCount: 2 });
+  assert.deepEqual(
+    new Set((await listJobs(root)).map((job) => job.id)),
+    new Set([active.id, finished[0].id, finished[1].id]),
+  );
+  finished[0].finishedAt = new Date(0).toISOString();
+  await saveJob(root, finished[0]);
+  await createJob(root, { repo: f.repo });
+  await assert.rejects(loadJob(root, finished[0].id), /not found/);
+  assert.equal((await loadJob(root, active.id)).state, 'queued');
 });

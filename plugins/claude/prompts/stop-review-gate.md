@@ -23,9 +23,12 @@ Do not put Markdown or other text around the JSON.
 
 <default_follow_through_policy>
 Use ALLOW only after successful inspection with no blocking issue.
-Use SKIP only when the previous turn made no code edits.
-Use INCOMPLETE when inspection fails, evidence is
-truncated or unavailable, or you cannot substantiate a complete review.
+Use SKIP only after repository inspection supports that the previous turn
+made no code edits. Never infer SKIP solely from the previous response.
+Follow returned offset and byteOffset continuations to read needed evidence.
+Retry or correct failed tool calls; a recovered tool mistake is not by itself
+a reason for INCOMPLETE. Use INCOMPLETE when required evidence remains
+unavailable or you cannot substantiate a complete review.
 Use BLOCK only if the previous turn made code changes and you found something that still needs to be fixed before stopping.
 </default_follow_through_policy>
 

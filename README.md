@@ -148,14 +148,22 @@ blocking. Only a valid blocking verdict stops the turn. Authentication errors,
 timeouts, invalid output, and unreadable configuration produce a notice with
 recovery guidance. Successful reviews and no-edit skips are silent. Blocked
 reviews show only the first-line reason and a `$claude:result JOB_ID` command
-for full details. Missing, failed, or truncated inspection produces an
-INCOMPLETE notice, even if the model claims ALLOW. Blocking findings and
-SKIP/INCOMPLETE explanations are preserved even when inspection fails. Page
-boundaries defer whole lines; a single line exceeding the byte limit still
-produces incomplete evidence. The runtime checks a private inspection record
-written by its MCP server. The verdict uses a validated JSON schema; repository
-text remains untrusted evidence, and model review is not a security boundary
-against prompt injection.
+for full details. ALLOW and SKIP both require a successful repository tool call;
+no inspection (including an MCP startup failure) produces an INCOMPLETE notice.
+Tool errors are reported to the reviewer and can be recovered by correcting or
+retrying requests. The reviewer must report INCOMPLETE when required evidence
+remains unavailable. BLOCK and INCOMPLETE explanations are preserved. Page
+boundaries defer whole lines, and long lines return an offset and byteOffset
+continuation without discarding their tails. The runtime checks a private
+inspection record written by its MCP server. The verdict uses a validated JSON
+schema; repository text remains untrusted evidence, and model review is not a
+security boundary against prompt injection.
+
+After an ALLOW, unchanged repository state in the same session can skip the
+model call with a notice. The check hashes HEAD, index entries, and tracked and
+untracked file contents before and after review. A failed or blocked attempt
+invalidates the cached state. A new session, submodules, missing HEAD, or a
+snapshot exceeding its 32 MiB/5-second file budget uses a fresh review.
 
 ## Privacy and storage
 
@@ -165,7 +173,7 @@ built-in shell or file tools and cannot select arbitrary Git flags. File reads
 exclude ignored files, common secret filenames, and symlinks that escape the
 checkout. The same secret exclusions apply to diff content at every depth.
 Listings, reads, and diffs stream into bounded pages; diffs accept a literal
-file filter. Long lines include an explicit truncation marker. The plugin
+file filter. Long lines include explicit continuation cursors. The plugin
 disables other MCP servers, hooks, skills, and session persistence, and loads
 user settings for credentials and model defaults. It doesn't load project or
 local Claude settings. These are tool restrictions, not an operating-system
@@ -178,16 +186,19 @@ Review data is stored outside your checkout with private file permissions:
 ```
 
 This includes prompts, findings, progress, and gate state, grouped by checkout.
-The data may contain source code and stays there until you delete it. Remove old
-data only after its jobs have finished. Set `CLAUDE_REVIEW_DATA_DIR` to use
-another location.
+The data may contain source code. Before creating each job, the runtime prunes
+finished jobs older than 30 days and keeps at most 100 finished jobs per
+checkout. Active jobs are preserved. Gate prompts are passed in memory and never
+saved to the job store; completed jobs retain findings, elapsed time and
+provider usage/cost when supplied. Manual review prompts remain until their jobs
+are pruned. Set `CLAUDE_REVIEW_DATA_DIR` to use another location.
 
 <details>
 <summary>Runtime details</summary>
 
-- Automatic reviews have a 10-minute subprocess timeout, leaving five minutes
-  within the Stop hook deadline for startup, cleanup, and verdict persistence.
-  Explicit reviews run until completion or cancellation.
+- Automatic reviews have a two-minute subprocess timeout, leaving room within
+  the Stop hook deadline for startup, cleanup, and verdict persistence. Explicit
+  reviews run until completion or cancellation.
 - Adversarial and automatic reviews use Claude's `--json-schema` option. The
   runtime validates the `structured_output` result and renders it as Markdown.
   Missing output and schema failures remain failed reviews.

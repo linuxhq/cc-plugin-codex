@@ -3,7 +3,7 @@ import { reviewWithClaude } from './claude.mjs';
 import { exists, jobPath, loadJob, saveJob, terminalStates } from './store.mjs';
 import { saveProgress, updateProgress } from './progress.mjs';
 
-export async function executeJob(root, id) {
+export async function executeJob(root, id, { prompt } = {}) {
   const job = await loadJob(root, id);
   if (terminalStates.includes(job.state)) return job;
   const controller = new AbortController();
@@ -24,6 +24,7 @@ export async function executeJob(root, id) {
     job.state = 'running';
     job.startedAt = new Date().toISOString();
     await saveJob(root, job);
+    if (prompt) job.prompt = prompt;
     job.output = await reviewWithClaude(job, controller.signal, (update) => {
       progress = updateProgress(progress, update);
     });
@@ -37,6 +38,9 @@ export async function executeJob(root, id) {
     process.removeListener('SIGINT', abort);
   }
   job.finishedAt = new Date().toISOString();
+  job.elapsedMs =
+    Date.parse(job.finishedAt) - Date.parse(job.startedAt || job.createdAt);
+  if (job.command === 'stop-review-gate') delete job.prompt;
   job.progress = { ...progress, phase: job.state };
   await saveJob(root, job);
   return job;

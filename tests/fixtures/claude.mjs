@@ -39,8 +39,10 @@ if (args[0] === '--version') {
     await writeFile(
       audit,
       JSON.stringify({
-        successes: 1,
-        failures: mode === 'inspection-failed' ? 1 : 0,
+        successes: mode === 'inspection-failed' ? 0 : 1,
+        failures: ['inspection-failed', 'inspection-recovered'].includes(mode)
+          ? 1
+          : 0,
       }),
     );
   if (args.includes('stream-json')) {
@@ -68,6 +70,9 @@ if (args[0] === '--version') {
     console.log(
       JSON.stringify({
         type: 'result',
+        duration_ms: 123,
+        total_cost_usd: 0.01,
+        usage: { input_tokens: 10, output_tokens: 5 },
         subtype: 'success',
         is_error: false,
         ...(args.includes('--json-schema') && mode !== 'no-structured'

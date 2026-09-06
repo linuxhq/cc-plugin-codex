@@ -29,6 +29,13 @@ export const inspectionTool = {
       staged: { type: 'boolean' },
       offset: { type: 'integer', minimum: 0 },
       limit: { type: 'integer', minimum: 1, maximum: 2000 },
+      byteOffset: {
+        type: 'integer',
+        minimum: 0,
+        description:
+          'Byte position within the offset line; use the returned ' +
+          'next byteOffset to continue long lines. Not valid for files.',
+      },
     },
   },
 };
@@ -57,7 +64,8 @@ function validateInput(input) {
 }
 
 function validatePage(input) {
-  const { offset = 0, limit = 500 } = input;
+  const { offset = 0, limit = 500, byteOffset = 0 } = input;
+  validateByteOffset(input.operation, byteOffset);
   if (
     !Number.isSafeInteger(offset) ||
     offset < 0 ||
@@ -200,4 +208,13 @@ async function diff(repo, input, page) {
     ],
     page,
   );
+}
+
+function validateByteOffset(operation, byteOffset) {
+  if (
+    !Number.isSafeInteger(byteOffset) ||
+    byteOffset < 0 ||
+    (operation === 'files' && byteOffset !== 0)
+  )
+    throw new Error('Invalid byte offset.');
 }

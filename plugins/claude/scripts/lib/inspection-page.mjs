@@ -1,55 +1,47 @@
 const maxPageBytes = 256 * 1024;
 
 // Buffer only a bounded preview of each record, even for a huge single line.
-export function inspectionPage({ offset = 0, limit = 500 } = {}, options = {}) {
-  let partial = '';
-  let omitted = 0,
-    pending = false;
+export function inspectionPage(
+  { offset = 0, limit = 500, byteOffset = 0 } = {},
+  options = {},
+) {
   let index = 0,
     count = 0,
     bytes = 0;
   let next = offset;
+  let nextByte = 0;
   let full = false;
   const output = [];
   const separator = options.separator ?? '\n';
-  const append = (piece) => {
-    if (piece.length) pending = true;
-    if ((index < offset || full) && !options.include) return;
-    const buffer = Buffer.from(piece);
-    const room = Math.max(0, maxPageBytes - Buffer.byteLength(partial));
-    partial += buffer.subarray(0, room).toString('utf8');
-    omitted += Math.max(0, buffer.length - room);
-  };
+  const lineBuffer = boundedLine(byteOffset);
+  const append = (piece) =>
+    lineBuffer.append(
+      piece,
+      index === offset,
+      (index < offset || full) && !options.include,
+    );
   const record = () => {
-    pending = false;
-    const value = partial;
-    const skipped = omitted;
-    partial = '';
-    omitted = 0;
+    const { value, skipped } = lineBuffer.take();
     if (options.include && !options.include(value)) return;
     const line = index++;
     if (line < offset || full) return;
     const rendered = options.render ? options.render(value) : value;
     const prefix = `${line + 1}: `;
     const room = maxPageBytes - bytes - Buffer.byteLength(prefix) - 100;
-    if (room <= 0) {
-      full = true;
-      return;
-    }
     const buffer = Buffer.from(rendered);
     // Retry this whole line on the next page instead of losing its tail merely
     // because preceding lines used the byte budget.
-    if (shouldDefer(count, skipped, buffer.length, room)) {
+    if (room <= 0 || shouldDefer(count, skipped, buffer.length, room)) {
       full = true;
       return;
     }
-    const clipped = buffer.subarray(0, room).toString('utf8');
-    const lost = skipped + Math.max(0, buffer.length - room);
-    const marker = lost ? ` [truncated ${lost} bytes on line ${line + 1}]` : '';
+    const clipped = utf8Prefix(buffer, room).toString('utf8');
+    const lost = skipped + buffer.length - Buffer.byteLength(clipped);
+    const marker = lost ? ` [continued: ${lost} bytes remain]` : '';
     output.push(prefix + clipped + marker);
     bytes += Buffer.byteLength(prefix + clipped + marker) + 1;
-    if (lost) options.onIncomplete?.();
-    next = index;
+    next = lost ? line : index;
+    nextByte = lost ? continuationByte(line, offset, byteOffset, clipped) : 0;
     full = ++count >= limit || lost > 0;
   };
   return {
@@ -57,10 +49,12 @@ export function inspectionPage({ offset = 0, limit = 500 } = {}, options = {}) {
       splitRecords(chunk, separator, append, record);
     },
     finish() {
-      if (pending) record();
+      if (lineBuffer.pending) record();
       return (
         output.join('\n') +
-        `\n[${index} total lines; next offset ${Math.min(next, index)}]`
+        `\n[${index} total lines; next offset ${Math.min(next, index)}` +
+        (nextByte ? `; next byteOffset ${nextByte}` : '') +
+        ']'
       );
     },
   };
@@ -82,4 +76,47 @@ function splitRecords(chunk, separator, append, record) {
 
 function shouldDefer(count, skipped, length, room) {
   return count > 0 && (skipped > 0 || length > room);
+}
+
+// Never split a UTF-8 code point between pages.
+function utf8Prefix(buffer, room) {
+  let end = Math.min(buffer.length, Math.max(0, room));
+  while (end > 0 && end < buffer.length && (buffer[end] & 0xc0) === 0x80) end--;
+  return buffer.subarray(0, end);
+}
+
+function boundedLine(byteOffset) {
+  let partial = '';
+  let omitted = 0;
+  let skip = byteOffset;
+  return {
+    pending: false,
+    append(piece, first, ignore) {
+      if (piece.length) this.pending = true;
+      if (ignore) return;
+      let buffer = Buffer.from(piece);
+      if (first && skip) {
+        const consumed = Math.min(skip, buffer.length);
+        buffer = buffer.subarray(consumed);
+        skip -= consumed;
+      }
+      const room = omitted
+        ? 0
+        : Math.max(0, maxPageBytes - Buffer.byteLength(partial));
+      const kept = utf8Prefix(buffer, room);
+      partial += kept.toString('utf8');
+      omitted += buffer.length - kept.length;
+    },
+    take() {
+      const result = { value: partial, skipped: omitted };
+      partial = '';
+      omitted = 0;
+      this.pending = false;
+      return result;
+    },
+  };
+}
+
+function continuationByte(line, offset, byteOffset, clipped) {
+  return (line === offset ? byteOffset : 0) + Buffer.byteLength(clipped);
 }

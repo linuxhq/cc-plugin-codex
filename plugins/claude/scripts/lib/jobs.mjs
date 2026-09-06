@@ -22,7 +22,7 @@ import {
 export async function prepareJob(repo, root, options, target) {
   target ??= await collectReview(repo, options);
   const prompt = await buildPrompt(options.command, target, options.focus);
-  return createJob(root, {
+  const job = await createJob(root, {
     repo,
     command: options.command,
     sessionId: options.sessionId || currentSessionId(),
@@ -32,8 +32,9 @@ export async function prepareJob(repo, root, options, target) {
       base: target.base,
       inputMode: target.inputMode,
     },
-    prompt,
+    ...(options.command === 'stop-review-gate' ? {} : { prompt }),
   });
+  return { ...job, prompt };
 }
 
 export async function launchBackground(root, job) {
