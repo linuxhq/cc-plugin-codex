@@ -60,16 +60,29 @@ $claude:result
 
 ### Review arguments
 
+Both skills are explicitly invoked and review-only: they return the command's
+stdout verbatim and do not apply fixes. Normal review checks implementation
+defects. Adversarial review challenges the approach, design choices, tradeoffs,
+and assumptions; it is not just a stricter correctness pass.
+
+Pass `--wait` or `--background` to choose execution mode directly. Without
+either flag, the skill estimates the change size and asks once. It recommends
+waiting for clearly tiny changes (roughly one or two files), and background
+execution for larger or uncertain scopes. Background execution returns without
+polling; use `$claude:status` and `$claude:result` to follow the job.
+
 Both review commands accept:
 
-- `--wait`: wait for the result (the default).
+- `--wait`: wait for the result.
 - `--background`: return immediately with a job ID. Cannot be combined with
   `--wait`.
 - `--base REF`: review the branch from its merge base with this ref to HEAD.
-  Tracked working files must be clean.
 - `--scope auto|working-tree|branch`: default to `auto`, which selects branch
-  review when `--base` is present and working-tree review otherwise. Explicit
-  `branch` requires `--base`; explicit `working-tree` rejects it.
+  review when the checkout is clean and working-tree review when local changes
+  exist. Branch scope detects the default base if none is given. `--base` takes
+  precedence over scope; explicit `working-tree` without a base reviews only
+  local changes. Base detection checks origin HEAD, then main, master, and
+  trunk.
 - `--model MODEL`: override Claude's configured model.
 - `--effort low|medium|high|xhigh|max`: override Claude's configured effort.
   Supported model and effort combinations depend on the installed CLI and
@@ -78,13 +91,19 @@ Both review commands accept:
 Only `$claude:adversarial-review` accepts custom focus text, either as
 positional arguments or through `--focus-file PATH`.
 
+Adversarial reviews pass the upstream structured output schema through Claude's
+`--json-schema` flag. The runtime requires the `structured_output` result field,
+validates it, and renders findings in upstream's Markdown layout. Missing
+output, schema retry failures, and invalid data are reported as failed reviews.
+
 ### Review scope and jobs
 
 - Working-tree reviews include staged and unstaged patches plus nonignored
   untracked files, even before the first commit. Ignored files are excluded.
 - Binary changes are identified, but their contents are not reviewed.
-- Context over 1 MiB is rejected before calling Claude. Split large changes into
-  smaller reviews.
+- Context up to 256 KiB is included in the prompt. Larger diffs are streamed to
+  a complete private snapshot that Claude can read in sections with Read and
+  Grep. This applies to working-tree, branch, and automatic turn reviews.
 - Without a job ID, `result` and `cancel` select the latest job in this checkout
   across Codex sessions. `status` lists the ten latest jobs. Use an explicit ID
   when multiple sessions are active.
@@ -92,6 +111,12 @@ positional arguments or through `--focus-file PATH`.
 - Background reviews snapshot the patch at launch, but supporting file reads use
   the live checkout. Avoid changing the checkout during a review when consistent
   surrounding context matters.
+
+`$claude:status` shows elapsed time (or final duration), the current phase, a
+short activity summary, and the last progress update. Pass a job ID to see the
+five most recent activity previews. Progress comes from Claude's streamed tool
+and text events; it does not indicate that a review passed. A heartbeat confirms
+worker liveness separately from progress updates.
 
 ## Automatic review gate
 
@@ -168,14 +193,14 @@ Jobs continue when a Codex thread ends; use the job ID to cancel them
 explicitly. There are no background completion notifications; status and result
 are the supported way to check background work.
 
-Prompts, findings, and job metadata are stored with private file permissions
-under `~/.codex/plugins/data/claude-review/jobs/`, grouped by repository path.
-Set `CLAUDE_REVIEW_DATA_DIR` to choose another writable location. Artifacts may
-contain source code and are retained until you delete them; remove old job
-directories after their workers finish. They are never written into the reviewed
-checkout. The gate setting is stored as `gate.json` in the same
-checkout-specific data directory. Separate worktrees have independent gate
-settings.
+Prompts, findings, progress, large-diff snapshots, and job metadata are stored
+with private file permissions under `~/.codex/plugins/data/claude-review/jobs/`,
+grouped by repository path. Set `CLAUDE_REVIEW_DATA_DIR` to choose another
+writable location. Artifacts may contain source code and are retained until you
+delete them; remove old job directories after their workers finish. They are
+never written into the reviewed checkout. The gate setting is stored as
+`gate.json` in the same checkout-specific data directory. Separate worktrees
+have independent gate settings.
 
 ## Development
 
@@ -197,6 +222,9 @@ The CLI can also be used directly from any repository:
 node /path/to/cc-plugin-codex/plugins/claude/scripts/claude-review.mjs help
 ```
 
+Direct CLI calls default to foreground execution; the mode-selection question
+belongs to the skills in Codex.
+
 The distributable plugin lives in `plugins/claude/`. Skills describe the
 commands; `scripts/lib/` contains focused modules for arguments, Git context,
 subprocesses, Claude invocation, job storage, and worker execution. Review
@@ -204,9 +232,16 @@ prompts live in `prompts/`.
 
 ## References
 
-The layout and review workflows are inspired by [OpenAI's Codex plugin for
-Claude Code][openai-plugin]. This project is an independent implementation
-focused on reviews.
+The two review skills and adversarial prompt are adapted from [OpenAI's Codex
+plugin for Claude Code][openai-plugin]. Their wording and review workflow follow
+upstream, with Claude names, Codex skill metadata, and host execution tools
+substituted. Claude provides the normal correctness review in place of Codex's
+native reviewer. Background jobs use this plugin's worker instead of Claude
+Code's background-task tool. Provider-specific options remain available.
+
+Source attribution, the pinned upstream revision, and adaptation details are in
+[`plugins/claude/NOTICE`](plugins/claude/NOTICE); copied material retains its
+Apache 2.0 license in [`plugins/claude/LICENSE`](plugins/claude/LICENSE).
 
 Packaging follows [Codex plugin documentation][codex-plugins]. Claude invocation
 follows the [Claude Code CLI reference][claude-cli].

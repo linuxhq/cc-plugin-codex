@@ -1,15 +1,17 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readlink } from 'node:fs/promises';
+import { lstat, open, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runProcess } from './process.mjs';
+import { collectContext } from './context.mjs';
 
 const maxContextBytes = 1024 * 1024;
 
-export async function git(cwd, args) {
+export async function git(cwd, args, options = {}) {
   const result = await runProcess('git', ['--no-pager', ...args], {
     cwd,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
     maxBytes: maxContextBytes * 2,
+    ...options,
   });
   if (result.code !== 0)
     throw new Error(result.stderr.trim() || 'Git command failed.');
@@ -25,23 +27,63 @@ export function fingerprint(value) {
 }
 
 export async function collectReview(repo, options) {
-  const scope = options.base ? 'branch' : 'working-tree';
-  const context =
-    scope === 'branch'
-      ? await branchContext(repo, options.base)
-      : await workingContext(repo);
-  if (Buffer.byteLength(context) > maxContextBytes) {
-    throw new Error(
-      'Review exceeds 1 MiB. Split the changes into smaller reviews. ' +
-        'Nothing was sent to Claude.',
-    );
-  }
+  const { scope, base } = await resolveReviewTarget(repo, options);
+  const captured = await collectContext(
+    (write) =>
+      scope === 'branch'
+        ? branchContext(repo, base, write)
+        : workingContext(repo, write),
+    options,
+  );
   return {
     scope,
-    base: options.base,
-    context,
-    fingerprint: fingerprint(context),
+    base,
+    ...captured,
   };
+}
+
+export async function resolveReviewTarget(repo, options) {
+  if (options.base) return { scope: 'branch', base: options.base };
+  if (options.scope === 'working-tree') return { scope: 'working-tree' };
+  const dirty = await git(repo, [
+    'status',
+    '--porcelain=v1',
+    '--untracked-files=all',
+  ]);
+  if (options.scope !== 'branch' && dirty) return { scope: 'working-tree' };
+  return { scope: 'branch', base: await detectDefaultBranch(repo) };
+}
+
+async function detectDefaultBranch(repo) {
+  try {
+    const ref = await git(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    if (ref.trim().startsWith('refs/remotes/origin/'))
+      return ref.trim().replace('refs/remotes/origin/', '');
+  } catch {
+    // Repositories without an origin HEAD use the conventional branch names.
+  }
+  for (const name of ['main', 'master', 'trunk']) {
+    for (const [prefix, base] of [
+      ['refs/heads/', name],
+      ['refs/remotes/origin/', `origin/${name}`],
+    ]) {
+      try {
+        await git(repo, [
+          'show-ref',
+          '--verify',
+          '--quiet',
+          `${prefix}${name}`,
+        ]);
+        return base;
+      } catch {
+        // Try the next local or remote candidate.
+      }
+    }
+  }
+  throw new Error(
+    'Unable to detect the repository default branch. ' +
+      'Pass --base <ref> or use --scope working-tree.',
+  );
 }
 
 const diffFlags = [
@@ -53,7 +95,7 @@ const diffFlags = [
   '--unified=5',
 ];
 
-async function branchContext(repo, base) {
+async function branchContext(repo, base, write) {
   const revision = (
     await git(repo, [
       'rev-parse',
@@ -63,61 +105,73 @@ async function branchContext(repo, base) {
     ])
   ).trim();
   const mergeBase = (await git(repo, ['merge-base', revision, 'HEAD'])).trim();
-  // File-reading tools must see the same tracked contents as the branch diff.
-  const dirty = await git(repo, [
-    'status',
-    '--porcelain=v1',
-    '--untracked-files=no',
-  ]);
-  if (dirty)
-    throw new Error(
-      'Branch review requires a clean tracked working tree. ' +
-        'Commit or stash changes first.',
-    );
-  return git(repo, [...diffFlags, `${mergeBase}...HEAD`, '--']);
+  await git(repo, [...diffFlags, `${mergeBase}...HEAD`, '--'], {
+    captureStdout: false,
+    onStdout: write,
+  });
 }
 
-async function workingContext(repo) {
-  const staged = await git(repo, [...diffFlags, '--cached', '--']);
-  const unstaged = await git(repo, [...diffFlags, '--']);
+async function workingContext(repo, write) {
+  await diffSection(
+    repo,
+    [...diffFlags, '--cached', '--'],
+    'STAGED CHANGES (index)',
+    write,
+  );
+  await diffSection(
+    repo,
+    [...diffFlags, '--'],
+    'UNSTAGED CHANGES (relative to index)',
+    write,
+  );
   const files = (
     await git(repo, ['ls-files', '--others', '--exclude-standard', '-z'])
   )
     .split('\0')
     .filter(Boolean);
-  const sections = [];
-  if (staged) sections.push(`STAGED CHANGES (index)\n${staged}`);
-  if (unstaged)
-    sections.push(`UNSTAGED CHANGES (relative to index)\n${unstaged}`);
   for (const file of files) {
-    sections.push(await untrackedFile(repo, file));
-    if (Buffer.byteLength(sections.join('\n')) > maxContextBytes) {
-      throw new Error(
-        'Review exceeds 1 MiB. Split the changes into smaller reviews.',
-      );
-    }
+    await untrackedFile(repo, file, write);
   }
-  return sections.join('\n');
 }
 
-async function untrackedFile(repo, file) {
+async function diffSection(repo, args, label, write) {
+  let first = true;
+  await git(repo, args, {
+    captureStdout: false,
+    onStdout(chunk) {
+      if (first) write(`${label}\n`);
+      first = false;
+      write(chunk);
+    },
+  });
+  if (!first) write('\n');
+}
+
+async function untrackedFile(repo, file, write) {
   const path = join(repo, file);
   const stat = await lstat(path);
-  const label = `UNTRACKED FILE ${JSON.stringify(file)}`;
+  write(`UNTRACKED FILE ${JSON.stringify(file)}\n`);
   if (stat.isSymbolicLink())
-    return `${label}\nSymlink target: ${await readlink(path)}\n`;
+    return write(`Symlink target: ${await readlink(path)}\n`);
   if (!stat.isFile())
-    return `${label}\nNon-regular file; contents not reviewed.\n`;
-  if (stat.size > maxContextBytes)
-    throw new Error(`Untracked file is too large: ${file}`);
-  const content = await readFile(path);
-  if (content.includes(0)) {
-    return [
-      label,
-      'Binary file; contents not reviewed.',
-      `SHA-256: ${fingerprint(content)}`,
-      '',
-    ].join('\n');
+    return write('Non-regular file; contents not reviewed.\n');
+  const handle = await open(path, 'r');
+  try {
+    let binary = false;
+    const hash = createHash('sha256');
+    for await (const chunk of handle.createReadStream({ autoClose: false })) {
+      binary ||= chunk.includes(0);
+      hash.update(chunk);
+    }
+    if (binary) {
+      write('Binary file; contents not reviewed.\n');
+      write(`SHA-256: ${hash.digest('hex')}`);
+    } else {
+      const stream = handle.createReadStream({ start: 0, autoClose: false });
+      for await (const chunk of stream) write(chunk);
+    }
+    write('\n');
+  } finally {
+    await handle.close();
   }
-  return `${label}\n${content.toString('utf8')}\n`;
 }

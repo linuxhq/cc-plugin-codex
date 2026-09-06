@@ -70,11 +70,6 @@ function validateScope(values) {
   if (!['auto', 'working-tree', 'branch'].includes(values.scope)) {
     throw new Error('Scope must be auto, working-tree, or branch.');
   }
-  if (values.scope === 'working-tree' && values.base !== undefined) {
-    throw new Error('--base cannot be combined with --scope working-tree.');
-  }
-  if (values.scope === 'branch' && !values.base)
-    throw new Error('Branch review requires --base.');
 }
 
 export const help = `Claude review plugin for Codex
@@ -87,6 +82,7 @@ result [JOB_ID]
 cancel [JOB_ID]
 
 Both reviews accept --model MODEL and --effort low|medium|high|xhigh|max.
-Defaults: foreground, Claude's configured model/effort, working-tree scope.
-Passing --base selects branch scope in auto mode; branch scope requires --base.
+Defaults: foreground, Claude's configured model/effort, auto scope.
+Auto reviews local changes when dirty, otherwise the branch against its base.
+Passing --base selects branch scope; otherwise branch scope detects the base.
 `;

@@ -101,3 +101,20 @@ test('same-size edits with preserved timestamps are reviewed', async (t) => {
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   assert.match(request.input, /\+export const value = 2/);
 });
+
+test('large turn snapshots are available to Claude through Read', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  await event(f, 'UserPromptSubmit');
+  await f.write('app.js', 'turn change\n'.repeat(200_000) + 'TURN_TAIL\n');
+  assert.deepEqual(await event(f, 'Stop'), {});
+  const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+  const directory = request.args[request.args.indexOf('--add-dir') + 1];
+  assert.ok(
+    request.input.includes(JSON.stringify(join(directory, 'changes.patch'))),
+  );
+  assert.match(
+    await readFile(join(directory, 'changes.patch'), 'utf8'),
+    /\+TURN_TAIL/,
+  );
+});

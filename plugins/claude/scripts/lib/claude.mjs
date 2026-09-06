@@ -1,29 +1,30 @@
 import { readFile } from 'node:fs/promises';
 import { runProcess } from './process.mjs';
+import {
+  adversarialPrompt,
+  renderAdversarial,
+  schema,
+  targetLabel,
+} from './adversarial.mjs';
+import { renderNativeReviewResult } from './render.mjs';
+import { reviewStream } from './stream.mjs';
 
 export async function buildPrompt(command, target, focus = '') {
   const instructions = await readFile(
-    new URL(
-      command === 'stop-review-gate'
-        ? '../../prompts/stop-review-gate.md'
-        : '../../prompts/review.md',
-      import.meta.url,
-    ),
+    new URL(`../../prompts/${command}.md`, import.meta.url),
     'utf8',
   );
-  const challenge =
-    command === 'adversarial-review'
-      ? await readFile(
-          new URL('../../prompts/adversarial-review.md', import.meta.url),
-          'utf8',
-        )
-      : '';
+  if (command === 'adversarial-review')
+    return adversarialPrompt(instructions, target, focus);
   const format = await readFile(
     new URL('../../prompts/findings-format.md', import.meta.url),
     'utf8',
   );
   return {
-    system: `${instructions}\n${challenge}\n${format}`,
+    system:
+      command === 'stop-review-gate'
+        ? `${instructions}\n${format}`
+        : instructions,
     input: [
       `Review scope: ${target.scope}`,
       ...(target.base ? [`Base reference: ${target.base}`] : []),
@@ -43,7 +44,9 @@ export function claudeArgs(job) {
   const args = [
     '--print',
     '--output-format',
-    'json',
+    'stream-json',
+    '--verbose',
+    '--include-partial-messages',
     '--tools',
     'Read,Glob,Grep',
     '--allowedTools',
@@ -64,23 +67,39 @@ export function claudeArgs(job) {
     '--system-prompt',
     job.prompt.system,
   ];
+  if (job.command === 'adversarial-review')
+    args.push('--json-schema', JSON.stringify(schema));
+  if (job.target?.contextDirectory)
+    args.push('--add-dir', job.target.contextDirectory);
   if (job.model) args.push('--model', job.model);
   if (job.effort) args.push('--effort', job.effort);
   return args;
 }
 
-export async function reviewWithClaude(job, signal) {
+export async function reviewWithClaude(job, signal, onProgress) {
+  const stream = reviewStream(onProgress);
   const result = await runProcess('claude', claudeArgs(job), {
     cwd: job.repo,
     input: job.prompt.input,
     timeout:
       job.command === 'stop-review-gate' ? 14 * 60 * 1000 : 20 * 60 * 1000,
     signal,
+    captureStdout: false,
+    onStdout: stream.write,
   });
-  return parseResult(result.stdout, result);
+  const output = parseResult(stream.finish(), {
+    ...result,
+    structured: job.command === 'adversarial-review',
+  });
+  if (job.command === 'adversarial-review')
+    return renderAdversarial(output, job.target);
+  if (job.command === 'review')
+    return renderNativeReviewResult(output, targetLabel(job.target));
+  return output;
 }
 
-export function parseResult(stdout, { code = 0, stderr = '' } = {}) {
+export function parseResult(stdout, options = {}) {
+  const { code = 0, stderr = '', structured = false } = options;
   const result = decodeResult(stdout, stderr, code);
   if (
     code !== 0 ||
@@ -90,10 +109,19 @@ export function parseResult(stdout, { code = 0, stderr = '' } = {}) {
   ) {
     throw new Error(failureMessage(result, stdout, stderr, code));
   }
+  if (structured) return structuredResult(result, stderr);
   if (typeof result.result !== 'string' || !result.result.trim()) {
     throw new Error(diagnostics('Claude returned an empty review.', stderr));
   }
   return result.result;
+}
+
+function structuredResult(result, stderr) {
+  if (!result.structured_output)
+    throw new Error(
+      diagnostics('Claude returned no structured output.', stderr),
+    );
+  return JSON.stringify(result.structured_output);
 }
 
 function decodeResult(stdout, stderr, code) {

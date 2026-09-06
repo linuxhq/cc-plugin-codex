@@ -1,6 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import { reviewWithClaude } from './claude.mjs';
 import { exists, jobPath, loadJob, saveJob, terminalStates } from './store.mjs';
+import { saveProgress, updateProgress } from './progress.mjs';
 
 export async function executeJob(root, id) {
   const job = await loadJob(root, id);
@@ -9,13 +10,23 @@ export async function executeJob(root, id) {
   const abort = () => controller.abort();
   process.once('SIGTERM', abort);
   process.once('SIGINT', abort);
-  const stopMonitor = monitor(root, id, controller);
+  let progress = updateProgress(
+    {},
+    {
+      phase: 'starting',
+      summary: 'Starting Claude.',
+    },
+  );
+  const stopMonitor = monitor(root, id, controller, () => progress);
   try {
     if (await exists(jobPath(root, id, 'cancel'))) controller.abort();
     if (controller.signal.aborted) throw new Error('Review cancelled.');
     job.state = 'running';
+    job.startedAt = new Date().toISOString();
     await saveJob(root, job);
-    job.output = await reviewWithClaude(job, controller.signal);
+    job.output = await reviewWithClaude(job, controller.signal, (update) => {
+      progress = updateProgress(progress, update);
+    });
     job.state = controller.signal.aborted ? 'cancelled' : 'completed';
   } catch (error) {
     job.state = controller.signal.aborted ? 'cancelled' : 'failed';
@@ -26,17 +37,19 @@ export async function executeJob(root, id) {
     process.removeListener('SIGINT', abort);
   }
   job.finishedAt = new Date().toISOString();
+  job.progress = { ...progress, phase: job.state };
   await saveJob(root, job);
   return job;
 }
 
-function monitor(root, id, controller) {
+function monitor(root, id, controller, progress) {
   let stopped = false;
   let timer;
   let pending = Promise.resolve();
   const tick = async () => {
     await writeFile(jobPath(root, id, 'heartbeat'), '', { mode: 0o600 });
     if (await exists(jobPath(root, id, 'cancel'))) controller.abort();
+    await saveProgress(root, id, progress());
   };
   const schedule = () => {
     pending = tick()

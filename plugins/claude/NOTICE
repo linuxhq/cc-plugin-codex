@@ -1,0 +1,17 @@
+Portions of this plugin are adapted from OpenAI's Codex plugin for Claude Code.
+Copyright 2026 OpenAI
+Licensed under the Apache License, Version 2.0; see LICENSE.
+
+Source: https://github.com/openai/codex-plugin-cc
+Revision: db52e28f4d9ded852ab3942cea316258ae4ef346
+
+Adapted files:
+- skills/review/SKILL.md (upstream commands/review.md)
+- skills/adversarial-review/SKILL.md (upstream commands/adversarial-review.md)
+- prompts/adversarial-review.md
+- schemas/review-output.schema.json
+- scripts/lib/git.mjs (target selection adapted from upstream scripts/lib/git.mjs)
+- scripts/lib/render.mjs (rendering adapted from upstream scripts/lib/render.mjs)
+
+Modified for Claude running in Codex: command names, skill metadata, question
+and background execution tools, safe argument passing, and Claude CLI transport.

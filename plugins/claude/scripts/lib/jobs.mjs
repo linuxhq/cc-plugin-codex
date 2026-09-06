@@ -3,6 +3,7 @@ import { open, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { buildPrompt } from './claude.mjs';
 import { collectReview } from './git.mjs';
+import { formatProgress, readProgress } from './progress.mjs';
 import {
   createJob,
   jobPath,
@@ -14,7 +15,7 @@ import {
 } from './store.mjs';
 
 export async function prepareJob(repo, root, options, target) {
-  target ??= await collectReview(repo, options);
+  target ??= await collectReview(repo, { ...options, contextRoot: root });
   if (!target.context) return null;
   const fileFocus = options['focus-file']
     ? await readFile(options['focus-file'], 'utf8')
@@ -30,6 +31,10 @@ export async function prepareJob(repo, root, options, target) {
       scope: target.scope,
       base: target.base,
       fingerprint: target.fingerprint,
+      contextDirectory: target.contextDirectory,
+      contextPath: target.contextPath,
+      contextBytes: target.contextBytes,
+      inputMode: target.inputMode,
     },
     prompt,
   });
@@ -70,8 +75,11 @@ export async function status(root, id) {
     : (await listJobs(root)).slice(0, 10);
   const rows = await Promise.all(
     jobs.map(async (job) =>
-      [job.id, await jobState(root, job), job.command, job.createdAt].join(
-        '  ',
+      formatProgress(
+        job,
+        await jobState(root, job),
+        await readProgress(root, job),
+        Boolean(id),
       ),
     ),
   );
@@ -106,7 +114,10 @@ export async function result(root, id) {
     if (job.target.scope === 'turn') {
       return { text: `${job.output}\n\nReview job: ${job.id}`, failed: false };
     }
-    const current = await collectReview(job.repo, job.target);
+    const current = await collectReview(job.repo, {
+      ...job.target,
+      fingerprintOnly: true,
+    });
     if (current.fingerprint !== job.target.fingerprint)
       warning = 'Review target has changed since this run.\n\n';
   } catch {

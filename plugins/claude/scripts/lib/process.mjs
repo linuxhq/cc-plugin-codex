@@ -27,11 +27,18 @@ export function runProcess(command, args, options = {}) {
       killTimer = setTimeout(() => terminate(child, 'SIGKILL'), 1000);
     };
     const receive = (stream) => (chunk) => {
-      size += Buffer.byteLength(chunk);
+      if (stream !== 'stdout' || options.captureStdout !== false)
+        size += Buffer.byteLength(chunk);
       if (size > maxBytes)
         return stop(new Error('Subprocess output exceeds limit.'));
-      if (stream === 'stdout') stdout += chunk;
-      else stderr += chunk;
+      if (stream === 'stdout') {
+        try {
+          options.onStdout?.(chunk);
+        } catch (error) {
+          return stop(error);
+        }
+        if (options.captureStdout !== false) stdout += chunk;
+      } else stderr += chunk;
     };
     child.stdout.setEncoding('utf8').on('data', receive('stdout'));
     child.stderr.setEncoding('utf8').on('data', receive('stderr'));

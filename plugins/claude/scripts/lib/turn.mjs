@@ -10,6 +10,7 @@ import {
 import { join, resolve } from 'node:path';
 import { fingerprint, git } from './git.mjs';
 import { runProcess } from './process.mjs';
+import { collectContext } from './context.mjs';
 
 function baselinePath(root, input) {
   if (!input.session_id || !input.turn_id)
@@ -26,7 +27,7 @@ async function readBaseline(path) {
   }
 }
 
-async function snapshotGit(repo, root, args, index) {
+async function snapshotGit(repo, root, args, index, options = {}) {
   const objects = join(root, 'objects');
   await mkdir(objects, { recursive: true, mode: 0o700 });
   const original = resolve(
@@ -44,6 +45,7 @@ async function snapshotGit(repo, root, args, index) {
       GIT_TERMINAL_PROMPT: '0',
     },
     maxBytes: 2 * 1024 * 1024,
+    ...options,
   });
   if (result.code !== 0) throw new Error(result.stderr || 'Snapshot failed.');
   return result.stdout;
@@ -96,23 +98,26 @@ export async function collectTurn(repo, root, input) {
   if (!/^[a-f0-9]{40,64}$/.test(baseline.tree))
     throw new Error('Invalid turn snapshot.');
   const tree = await snapshot(repo, root);
-  const context = await snapshotGit(
-    repo,
-    root,
-    [
-      'diff',
-      '--no-ext-diff',
-      '--no-textconv',
-      '--no-color',
-      '--full-index',
-      '--unified=5',
-      baseline.tree,
-      tree,
-      '--',
-    ],
-    join(root, `index-${randomUUID()}`),
+  const captured = await collectContext(
+    (write) =>
+      snapshotGit(
+        repo,
+        root,
+        [
+          'diff',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--no-color',
+          '--full-index',
+          '--unified=5',
+          baseline.tree,
+          tree,
+          '--',
+        ],
+        join(root, `index-${randomUUID()}`),
+        { captureStdout: false, onStdout: write },
+      ),
+    { contextRoot: root },
   );
-  if (Buffer.byteLength(context) > 1024 * 1024)
-    throw new Error('Turn review exceeds 1 MiB. Nothing was sent to Claude.');
-  return { scope: 'turn', context, fingerprint: fingerprint(context) };
+  return { scope: 'turn', ...captured };
 }

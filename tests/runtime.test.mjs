@@ -87,8 +87,13 @@ test('cancellation stops a running background Claude process', async (t) => {
     });
   });
   await eventually(async () => {
-    return (await f.run(['status', id])).stdout.includes('running');
+    const status = (await f.run(['status', id])).stdout;
+    return status.includes('Phase: reading') && status.includes('Using Read.');
   });
+  const status = (await f.run(['status', id])).stdout;
+  assert.match(status, /Elapsed: \d+s/);
+  assert.match(status, /Last update:/);
+  assert.match(status, /Progress:/);
   assert.match((await f.run(['cancel', id])).stdout, /Cancellation requested/);
   await eventually(async () => {
     return (await f.run(['status', id])).stdout.includes('cancelled');
@@ -97,6 +102,25 @@ test('cancellation stops a running background Claude process', async (t) => {
   assert.equal(result.code, 1);
   assert.match(result.stdout, /cancelled/);
   assert.doesNotMatch(result.stdout, /Example finding/);
+});
+
+test('adversarial schema is enforced and missing output fails', async (t) => {
+  const f = await fixture(t);
+  await f.write('app.js', 'changed\n');
+  const run = await f.run(['adversarial-review', '--wait'], {
+    FAKE_CLAUDE_MODE: 'no-structured',
+  });
+  assert.equal(run.code, 1);
+  assert.match(run.stdout, /no structured output/);
+  const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+  const schema = JSON.parse(
+    request.args[request.args.indexOf('--json-schema') + 1],
+  );
+  assert.deepEqual(schema.properties.verdict.enum, [
+    'approve',
+    'needs-attention',
+  ]);
+  assert.ok(request.args.includes('stream-json'));
 });
 
 test('setup checks authentication without a review', async (t) => {
@@ -126,5 +150,17 @@ test('focus files handle newlines and shell syntax', async (t) => {
   const run = await f.run(['adversarial-review', '--focus-file', path]);
   assert.equal(run.code, 0, run.stderr);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE, 'utf8'));
-  assert.ok(request.input.includes('First line\\nSecond $line `literal`'));
+  assert.ok(request.input.includes('First line\nSecond $line `literal`'));
+});
+
+test('invalid adversarial JSON fails with raw diagnostics', async (t) => {
+  const f = await fixture(t);
+  await f.write('app.js', 'changed\n');
+  const run = await f.run(['adversarial-review', '--wait'], {
+    FAKE_CLAUDE_OUTPUT: '{"verdict":"approve","findings":[]}',
+  });
+  assert.equal(run.code, 1);
+  assert.match(run.stdout, /Missing summary/);
+  assert.match(run.stdout, /Raw final message/);
+  assert.match((await f.run(['status'])).stdout, /failed/);
 });

@@ -1,3 +1,5 @@
 interface:
   display_name: 'Claude Review'
   short_description: 'Args: --wait, --background, --base REF, --scope SCOPE'
+policy:
+  allow_implicit_invocation: false

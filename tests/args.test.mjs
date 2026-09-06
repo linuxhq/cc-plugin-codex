@@ -27,9 +27,7 @@ test('adversarial focus and model values survive parsing verbatim', () => {
 
 for (const args of [
   ['review', '--background', '--wait'],
-  ['review', '--scope', 'branch'],
   ['review', '--scope', 'staged'],
-  ['review', '--scope', 'working-tree', '--base', 'main'],
   ['review', 'custom focus'],
   ['review', '--focus-file', 'focus.txt'],
   ['review', '--effort', 'extreme'],
