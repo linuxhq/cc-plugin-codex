@@ -139,7 +139,7 @@ test('JSON handles setup, empty reviews, and errors', async (t) => {
   for (const args of [
     ['status', '--wait', '--json'],
     ['review', '--cwd', '/no/such/path', '--json'],
-    ['result', 'review-ab', '--json'],
+    ['result', 'review-00000000-0000-0000-0000-000000000000', '--json'],
   ]) {
     const run = await f.run(args);
     assert.equal(run.code, 1);
