@@ -3,13 +3,12 @@ import { open, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { buildPrompt } from './claude.mjs';
 import { collectReview } from './git.mjs';
-import { formatProgress, readProgress } from './progress.mjs';
+import { currentSessionId, statusReport } from './status.mjs';
 import {
   createJob,
   jobPath,
   jobState,
-  listJobs,
-  loadJob,
+  resolveJob,
   saveJob,
   terminalStates,
 } from './store.mjs';
@@ -25,6 +24,7 @@ export async function prepareJob(repo, root, options, target) {
   return createJob(root, {
     repo,
     command: options.command,
+    sessionId: options.sessionId || currentSessionId(),
     model: options.model,
     effort: options.effort,
     target: {
@@ -63,27 +63,11 @@ export async function launchBackground(root, job) {
 }
 
 export async function selectJob(root, id) {
-  if (id) return loadJob(root, id);
-  const jobs = await listJobs(root);
-  if (!jobs.length) throw new Error('No review jobs in this repository.');
-  return jobs[0];
+  return resolveJob(root, id);
 }
 
-export async function status(root, id) {
-  const jobs = id
-    ? [await loadJob(root, id)]
-    : (await listJobs(root)).slice(0, 10);
-  const rows = await Promise.all(
-    jobs.map(async (job) =>
-      formatProgress(
-        job,
-        await jobState(root, job),
-        await readProgress(root, job),
-        Boolean(id),
-      ),
-    ),
-  );
-  return rows.join('\n') || 'No review jobs in this repository.';
+export async function status(root, id, options = {}) {
+  return (await statusReport(root, { ...options, id })).text;
 }
 
 export async function cancelJob(root, id) {

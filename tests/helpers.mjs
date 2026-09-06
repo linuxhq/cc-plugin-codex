@@ -30,6 +30,7 @@ export async function fixture(t, { commit = true } = {}) {
   await writeFile(join(bin, 'claude'), launcher, { mode: 0o700 });
   const env = {
     ...process.env,
+    CODEX_THREAD_ID: 'test-session',
     PATH: `${bin}${delimiter}${process.env.PATH}`,
     CLAUDE_REVIEW_DATA_DIR: join(root, 'data'),
     FAKE_CLAUDE_CAPTURE: join(root, 'request.json'),

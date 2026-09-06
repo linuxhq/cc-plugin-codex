@@ -91,8 +91,11 @@ export async function reviewWithClaude(job, signal, onProgress) {
     ...result,
     structured: job.command === 'adversarial-review',
   });
-  if (job.command === 'adversarial-review')
-    return renderAdversarial(output, job.target);
+  if (job.command === 'adversarial-review') {
+    const rendered = renderAdversarial(output, job.target);
+    job.structuredOutput = JSON.parse(output);
+    return rendered;
+  }
   if (job.command === 'review')
     return renderNativeReviewResult(output, targetLabel(job.target));
   return output;

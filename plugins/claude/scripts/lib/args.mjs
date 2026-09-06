@@ -2,31 +2,68 @@ import { parseArgs } from 'node:util';
 
 const reviewCommands = ['review', 'adversarial-review'];
 const jobCommands = ['status', 'result', 'cancel'];
+const commonOptions = { cwd: { type: 'string' }, json: { type: 'boolean' } };
 
 export function parseCommand(argv) {
   const [command = 'help', ...args] = argv;
   if (command === 'help' || command === '--help') return { command: 'help' };
   if (reviewCommands.includes(command)) return parseReview(command, args);
-  if (jobCommands.includes(command)) {
-    if (args.length > 1 || args[0]?.startsWith('-')) {
-      throw new Error(`${command} accepts only an optional job ID.`);
-    }
-    return { command, id: args[0] };
-  }
+  if (jobCommands.includes(command)) return parseJob(command, args);
   if (command === 'setup') return parseSetup(args);
   throw new Error(
     `Unknown command or arguments: ${command}. Run help for usage.`,
   );
 }
 
+function parseJob(command, args) {
+  const { values, positionals } = parseArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      ...commonOptions,
+      ...(command === 'status'
+        ? {
+            wait: { type: 'boolean' },
+            all: { type: 'boolean' },
+            'timeout-ms': { type: 'string' },
+            'poll-interval-ms': { type: 'string' },
+          }
+        : {}),
+    },
+  });
+  validateCommon(values);
+  if (positionals.length > 1)
+    throw new Error(`${command} accepts only an optional job ID.`);
+  if (values.wait && !positionals[0])
+    throw new Error('status --wait requires a job ID.');
+  for (const key of ['timeout-ms', 'poll-interval-ms']) {
+    if (values[key] === undefined) continue;
+    if (!values.wait) throw new Error(`--${key} requires --wait.`);
+    const number = Number(values[key]);
+    if (!/^\d+$/.test(values[key]) || !Number.isSafeInteger(number))
+      throw new Error(`--${key} must be a nonnegative integer.`);
+    if (key === 'poll-interval-ms' && number < 50)
+      throw new Error('--poll-interval-ms must be at least 50.');
+    values[key] = number;
+  }
+  return { command, ...values, id: positionals[0] };
+}
+
+function validateCommon(values) {
+  if (values.cwd !== undefined && !values.cwd.trim())
+    throw new Error('--cwd cannot be empty.');
+}
+
 function parseSetup(args) {
   const { values } = parseArgs({
     args,
     options: {
+      ...commonOptions,
       'enable-review-gate': { type: 'boolean' },
       'disable-review-gate': { type: 'boolean' },
     },
   });
+  validateCommon(values);
   if (values['enable-review-gate'] && values['disable-review-gate'])
     throw new Error('Choose --enable-review-gate or --disable-review-gate.');
   return { command: 'setup', ...values };
@@ -37,15 +74,17 @@ function parseReview(command, args) {
     args,
     allowPositionals: true,
     options: {
+      ...commonOptions,
       base: { type: 'string' },
       scope: { type: 'string', default: 'auto' },
-      model: { type: 'string' },
+      model: { type: 'string', short: 'm' },
       effort: { type: 'string' },
       background: { type: 'boolean', default: false },
       wait: { type: 'boolean', default: false },
       'focus-file': { type: 'string' },
     },
   });
+  validateCommon(values);
   validateScope(values);
   if (
     values.effort &&
@@ -77,11 +116,12 @@ export const help = `Claude review plugin for Codex
 review [--base REF] [--scope auto|working-tree|branch] [--wait|--background]
 adversarial-review [same options] [--focus-file PATH] [focus text...]
 setup [--enable-review-gate|--disable-review-gate]
-status [JOB_ID]
+status [JOB_ID] [--wait] [--timeout-ms MS] [--poll-interval-ms MS] [--all]
 result [JOB_ID]
 cancel [JOB_ID]
 
-Both reviews accept --model MODEL and --effort low|medium|high|xhigh|max.
+All commands accept --cwd PATH and --json (except help).
+Both reviews accept --model MODEL (-m) and --effort low|medium|high|xhigh|max.
 Defaults: foreground, Claude's configured model/effort, auto scope.
 Auto reviews local changes when dirty, otherwise the branch against its base.
 Passing --base selects branch scope; otherwise branch scope detects the base.

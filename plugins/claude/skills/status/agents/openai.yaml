@@ -1,3 +1,5 @@
 interface:
   display_name: 'Claude Status'
-  short_description: 'Args: [job-id]. Show active and recent Claude jobs.'
+  short_description: 'Args: [job-id], --wait, --timeout-ms MS, --all'
+policy:
+  allow_implicit_invocation: false

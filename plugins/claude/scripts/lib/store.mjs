@@ -74,6 +74,23 @@ export async function listJobs(root) {
   return jobs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
+export async function resolveJob(root, reference) {
+  if (reference && !/^review-[a-f0-9-]+$/.test(reference))
+    throw new Error('Invalid job ID.');
+  const jobs = await listJobs(root);
+  if (!reference) {
+    if (!jobs.length) throw new Error('No review jobs in this repository.');
+    return jobs[0];
+  }
+  const exact = jobs.find((job) => job.id === reference);
+  if (exact) return exact;
+  const matches = jobs.filter((job) => job.id.startsWith(reference));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1)
+    throw new Error('Job reference is ambiguous. Use a longer job ID.');
+  throw new Error(`Job not found in this repository: ${reference}`);
+}
+
 export async function exists(path) {
   try {
     await stat(path);

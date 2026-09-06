@@ -65,15 +65,16 @@ export async function runGate(input) {
         'Claude review skipped: no starting snapshot for this turn. ' +
         'Start a new turn with the UserPromptSubmit hook enabled and trusted.',
     };
-  return reviewTurn(repo, root, target);
+  return reviewTurn(repo, root, target, input.session_id);
 }
 
-async function reviewTurn(repo, root, target) {
+async function reviewTurn(repo, root, target, sessionId) {
   const job = await prepareJob(
     repo,
     root,
     {
       command: 'stop-review-gate',
+      sessionId,
     },
     target,
   );

@@ -6,6 +6,9 @@ Source: https://github.com/openai/codex-plugin-cc
 Revision: db52e28f4d9ded852ab3942cea316258ae4ef346
 
 Adapted files:
+- skills/status/SKILL.md (upstream commands/status.md)
+- skills/result/SKILL.md (upstream commands/result.md)
+- scripts/lib/status.mjs (status conventions from upstream runtime)
 - skills/review/SKILL.md (upstream commands/review.md)
 - skills/adversarial-review/SKILL.md (upstream commands/adversarial-review.md)
 - prompts/adversarial-review.md
