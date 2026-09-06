@@ -1,14 +1,14 @@
 {
-  "name": "cc-plugin-codex",
+  "name": "linuxhq",
   "interface": {
-    "displayName": "CC Plugin Codex"
+    "displayName": "linuxhq"
   },
   "plugins": [
     {
-      "name": "claude",
+      "name": "cc-plugin-codex",
       "source": {
         "source": "local",
-        "path": "./plugins/claude"
+        "path": "./plugins/cc-plugin-codex"
       },
       "policy": {
         "installation": "AVAILABLE",

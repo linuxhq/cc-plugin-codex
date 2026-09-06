@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   claudeArgs,
   parseResult,
-} from '../plugins/claude/scripts/lib/claude.mjs';
+} from '../plugins/cc-plugin-codex/scripts/lib/claude.mjs';
 
 test('only grants reading tools and disables hooks and MCP', () => {
   const args = claudeArgs({ prompt: { system: 'review' } });

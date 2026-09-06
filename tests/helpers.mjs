@@ -3,10 +3,13 @@ import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
+import { runProcess } from '../plugins/cc-plugin-codex/scripts/lib/process.mjs';
 
 export const cli = fileURLToPath(
-  new URL('../plugins/claude/scripts/claude-review.mjs', import.meta.url),
+  new URL(
+    '../plugins/cc-plugin-codex/scripts/claude-review.mjs',
+    import.meta.url,
+  ),
 );
 
 export async function fixture(t, { commit = true } = {}) {

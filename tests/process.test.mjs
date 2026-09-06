@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
+import { runProcess } from '../plugins/cc-plugin-codex/scripts/lib/process.mjs';
 
 test('reports missing executable without hanging', async () => {
   await assert.rejects(runProcess('/no/such/executable', []), {

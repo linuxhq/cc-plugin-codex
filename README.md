@@ -20,7 +20,7 @@ Add the GitHub marketplace and install the plugin:
 
 ```sh
 codex plugin marketplace add linuxhq/cc-plugin-codex
-codex plugin add claude@cc-plugin-codex
+codex plugin add cc-plugin-codex@linuxhq
 ```
 
 Start a new Codex session, then run `$claude-setup`.
@@ -31,7 +31,7 @@ Run these commands from the repository root:
 
 ```sh
 codex plugin marketplace add .
-codex plugin add claude@cc-plugin-codex
+codex plugin add cc-plugin-codex@linuxhq
 ```
 
 Start a new Codex session, then run `$claude-setup`. Codex may display the
@@ -123,13 +123,13 @@ calls.
 The CLI can also be used directly from any repository:
 
 ```sh
-node /path/to/cc-plugin-codex/plugins/claude/scripts/claude-review.mjs help
+node /path/to/cc-plugin-codex/plugins/cc-plugin-codex/scripts/claude-review.mjs help
 ```
 
-The distributable plugin lives in `plugins/claude/`. Skills describe the
-commands; `scripts/lib/` contains focused modules for arguments, Git context,
-subprocesses, Claude invocation, job storage, and worker execution. Review
-prompts live in `prompts/`.
+The distributable plugin lives in `plugins/cc-plugin-codex/`. Skills describe
+the commands; `scripts/lib/` contains focused modules for arguments, Git
+context, subprocesses, Claude invocation, job storage, and worker execution.
+Review prompts live in `prompts/`.
 
 ## References
 

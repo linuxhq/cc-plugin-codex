@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseCommand } from '../plugins/claude/scripts/lib/args.mjs';
+import { parseCommand } from '../plugins/cc-plugin-codex/scripts/lib/args.mjs';
 
 test('review defaults preserve Claude model and effort configuration', () => {
   const options = parseCommand(['review']);
