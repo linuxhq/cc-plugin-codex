@@ -1,0 +1,23 @@
+{
+  "name": "claude",
+  "version": "0.1.0",
+  "description": "Claude Code reviews and design challenges from Codex.",
+  "author": {
+    "name": "linuxhq"
+  },
+  "repository": "https://github.com/linuxhq/cc-plugin-codex",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Claude Review",
+    "shortDescription": "Ask Claude to review your code from Codex.",
+    "longDescription": "Run and manage Claude reviews of Git changes.",
+    "developerName": "linuxhq",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": [
+      "$claude-review",
+      "$claude-adversarial-review",
+      "$claude-setup"
+    ]
+  }
+}

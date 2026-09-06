@@ -1,0 +1,116 @@
+import { spawn } from 'node:child_process';
+import { open, readFile, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { buildPrompt } from './claude.mjs';
+import { collectReview } from './git.mjs';
+import {
+  createJob,
+  jobPath,
+  jobState,
+  listJobs,
+  loadJob,
+  saveJob,
+  terminalStates,
+} from './store.mjs';
+
+export async function prepareJob(repo, root, options) {
+  const target = await collectReview(repo, options);
+  if (!target.context) return null;
+  const fileFocus = options['focus-file']
+    ? await readFile(options['focus-file'], 'utf8')
+    : '';
+  const focus = [fileFocus, options.focus].filter(Boolean).join('\n');
+  const prompt = await buildPrompt(options.command, target, focus);
+  return createJob(root, {
+    repo,
+    command: options.command,
+    model: options.model,
+    effort: options.effort,
+    target: {
+      scope: target.scope,
+      base: target.base,
+      fingerprint: target.fingerprint,
+    },
+    prompt,
+  });
+}
+
+export async function launchBackground(root, job) {
+  const log = await open(jobPath(root, job.id, 'worker.log'), 'a', 0o600);
+  try {
+    const worker = fileURLToPath(new URL('../worker.mjs', import.meta.url));
+    const child = spawn(process.execPath, [worker, root, job.id], {
+      cwd: job.repo,
+      detached: true,
+      stdio: ['ignore', log.fd, log.fd],
+    });
+    await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('spawn', resolve);
+    });
+    child.unref();
+  } catch (error) {
+    await saveJob(root, { ...job, state: 'failed', error: error.message });
+    throw error;
+  } finally {
+    await log.close();
+  }
+}
+
+export async function selectJob(root, id) {
+  if (id) return loadJob(root, id);
+  const jobs = await listJobs(root);
+  if (!jobs.length) throw new Error('No review jobs in this repository.');
+  return jobs[0];
+}
+
+export async function status(root, id) {
+  const jobs = id
+    ? [await loadJob(root, id)]
+    : (await listJobs(root)).slice(0, 10);
+  const rows = await Promise.all(
+    jobs.map(async (job) =>
+      [job.id, await jobState(root, job), job.command, job.createdAt].join(
+        '  ',
+      ),
+    ),
+  );
+  return rows.join('\n') || 'No review jobs in this repository.';
+}
+
+export async function cancelJob(root, id) {
+  const job = await selectJob(root, id);
+  const state = await jobState(root, job);
+  if (terminalStates.includes(state)) return `${job.id} is already ${state}.`;
+  // Only the owning worker signals its child, avoiding persisted PID reuse.
+  await writeFile(jobPath(root, job.id, 'cancel'), '', { mode: 0o600 });
+  if (state === 'interrupted')
+    return `${job.id} was interrupted; cancellation recorded.`;
+  return [
+    `Cancellation requested for ${job.id}.`,
+    `Use $claude-status ${job.id} to confirm.`,
+  ].join('\n');
+}
+
+export async function result(root, id) {
+  const job = await selectJob(root, id);
+  const state = await jobState(root, job);
+  if (state !== 'completed') {
+    return {
+      text: `${job.id}: ${state}${job.error ? `\n${job.error}` : ''}`,
+      failed: ['failed', 'cancelled', 'interrupted'].includes(state),
+    };
+  }
+  let warning = '';
+  try {
+    const current = await collectReview(job.repo, job.target);
+    if (current.fingerprint !== job.target.fingerprint)
+      warning = 'Review target has changed since this run.\n\n';
+  } catch {
+    warning = 'Could not verify whether the review target has changed.\n\n';
+  }
+  return {
+    text: `${warning}${job.output}\n\nReview job: ${job.id}`,
+    failed: false,
+  };
+}

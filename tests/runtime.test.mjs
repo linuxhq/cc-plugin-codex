@@ -1,0 +1,114 @@
+import assert from 'node:assert/strict';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import test from 'node:test';
+import { fixture, extractId, eventually } from './helpers.mjs';
+
+test('foreground review preserves focus and leaves Git alone', async (t) => {
+  const f = await fixture(t);
+  const focus = 'Check $(touch injected) and `touch injected2`';
+  await f.write('app.js', 'export const value = 0;\n');
+  const before = await f.git('status', '--porcelain=v1');
+  const run = await f.run(['adversarial-review', '--', focus]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /Example finding/);
+  const id = extractId(run.stdout);
+  const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE, 'utf8'));
+  assert.ok(request.input.includes(focus));
+  assert.match(request.input, /value = 0/);
+  assert.equal(request.cwd, f.repo);
+  assert.equal(await f.git('status', '--porcelain=v1'), before);
+  assert.ok(!(await readdir(f.repo)).includes('injected'));
+  assert.match((await f.run(['result', id])).stdout, /Example finding/);
+  await f.write('app.js', 'changed after review\n');
+  assert.match((await f.run(['result', id])).stdout, /target has changed/);
+});
+
+test('empty review skips Claude and creates no job', async (t) => {
+  const f = await fixture(t);
+  const run = await f.run(['review']);
+  assert.equal(run.code, 0);
+  assert.match(run.stdout, /No changes to review/);
+  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
+  assert.match((await f.run(['status'])).stdout, /No review jobs/);
+});
+
+test('provider failures and malformed output remain failed jobs', async (t) => {
+  const f = await fixture(t);
+  await f.write('app.js', 'changed\n');
+  for (const mode of ['fail', 'malformed']) {
+    const run = await f.run(['review'], { FAKE_CLAUDE_MODE: mode });
+    assert.equal(run.code, 1);
+    assert.match(run.stdout, /failed/);
+    assert.match((await f.run(['result'])).stdout, /failed/);
+  }
+});
+
+test('background worker completes and exposes stored results', async (t) => {
+  const f = await fixture(t);
+  await f.write('app.js', 'changed\n');
+  const run = await f.run(['review', '--background']);
+  assert.equal(run.code, 0, run.stderr);
+  const id = extractId(run.stdout);
+  await eventually(async () => {
+    return (await f.run(['status', id])).stdout.includes('completed');
+  });
+  assert.match((await f.run(['result', id])).stdout, /Example finding/);
+  assert.match((await f.run(['cancel', id])).stdout, /already completed/);
+});
+
+test('cancellation stops a running background Claude process', async (t) => {
+  const f = await fixture(t);
+  await f.write('app.js', 'changed\n');
+  const run = await f.run(['review', '--background'], {
+    FAKE_CLAUDE_MODE: 'slow',
+  });
+  const id = extractId(run.stdout);
+  f.cleanup(async () => {
+    await f.run(['cancel', id]);
+    await eventually(async () => {
+      return (await f.run(['status', id])).stdout.includes('cancelled');
+    });
+  });
+  await eventually(async () => {
+    return (await f.run(['status', id])).stdout.includes('running');
+  });
+  assert.match((await f.run(['cancel', id])).stdout, /Cancellation requested/);
+  await eventually(async () => {
+    return (await f.run(['status', id])).stdout.includes('cancelled');
+  });
+  const result = await f.run(['result', id]);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /cancelled/);
+  assert.doesNotMatch(result.stdout, /Example finding/);
+});
+
+test('setup checks authentication without a review', async (t) => {
+  const f = await fixture(t);
+  const ready = await f.run(['setup']);
+  assert.equal(ready.code, 0);
+  assert.match(ready.stdout, /Authentication ready/);
+  const missing = await f.run(['setup'], {
+    FAKE_CLAUDE_MODE: 'unauthenticated',
+  });
+  assert.equal(missing.code, 1);
+  assert.match(missing.stderr, /claude auth login/);
+});
+
+test('rejects job path traversal', async (t) => {
+  const f = await fixture(t);
+  const run = await f.run(['result', '../outside']);
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /Invalid job ID/);
+});
+
+test('focus files handle newlines and shell syntax', async (t) => {
+  const f = await fixture(t);
+  const path = join(f.root, 'focus.md');
+  await writeFile(path, 'First line\nSecond $line `literal`');
+  await f.write('app.js', 'changed\n');
+  const run = await f.run(['adversarial-review', '--focus-file', path]);
+  assert.equal(run.code, 0, run.stderr);
+  const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE, 'utf8'));
+  assert.ok(request.input.includes('First line\\nSecond $line `literal`'));
+});
