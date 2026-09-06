@@ -28,7 +28,7 @@ export async function setup(options) {
     `Automatic review gate: ${enabled ? 'enabled' : 'disabled'} for ${repo}.`,
     ...(enabled
       ? [
-          'Trust both UserPromptSubmit and Stop hooks in /hooks; ' +
+          'Trust the Stop hook in /hooks; ' +
             'start a new session after installing or updating the plugin.',
         ]
       : []),

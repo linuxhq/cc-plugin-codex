@@ -39,10 +39,6 @@ async function main(options) {
   if (options.command === 'result')
     return showResult(root, options.id, options.json);
   const job = await prepareJob(repo, root, options);
-  if (!job) {
-    const text = 'No changes to review in the selected scope.';
-    return emit({ skipped: true, message: text }, text, options.json);
-  }
   if (options.background) {
     await launchBackground(root, job);
     const text =

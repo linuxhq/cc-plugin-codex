@@ -8,8 +8,10 @@ import {
 test('only grants reading tools and disables hooks and MCP', () => {
   const args = claudeArgs({ prompt: { system: 'review' } });
   const option = (name) => args[args.indexOf(name) + 1];
-  assert.equal(option('--tools'), 'Read,Glob,Grep');
-  assert.equal(option('--allowedTools'), 'Read,Glob,Grep');
+  assert.equal(option('--tools'), 'Read,Glob,Grep,Bash');
+  assert.ok(option('--allowedTools').includes('Bash(git diff *)'));
+  assert.ok(!option('--allowedTools').includes('Bash(git *)'));
+  assert.ok(!option('--allowedTools').includes('Bash(git commit *)'));
   assert.equal(option('--disallowedTools'), 'mcp__*');
   assert.equal(option('--permission-mode'), 'dontAsk');
   assert.deepEqual(JSON.parse(option('--settings')), { disableAllHooks: true });

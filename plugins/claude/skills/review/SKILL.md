@@ -91,5 +91,5 @@ node "/absolute/plugin/root/scripts/claude-review.mjs" review --background
 - Do not poll the review job or wait for completion in this turn.
 - After a successful launch, tell the user: "Claude review started in the
   background. Check `$claude:status` for progress."
-- If the CLI reports an empty scope or a launch failure, return that output
-  instead of claiming a review started.
+- If the CLI reports a launch failure, return that output instead of claiming a
+  review started.

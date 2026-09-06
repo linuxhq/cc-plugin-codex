@@ -1,2 +1,5 @@
 package-lock.json
 coverage/
+
+# Preserve the upstream prompt layout.
+plugins/claude/prompts/stop-review-gate.md

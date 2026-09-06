@@ -15,14 +15,11 @@ test('adversarial focus and model values survive parsing verbatim', () => {
     'adversarial-review',
     '--model',
     'provider/custom-model',
-    '--effort',
-    'high',
     '--',
     'check $(touch nope) and `commands`',
   ]);
   assert.equal(options.focus, 'check $(touch nope) and `commands`');
   assert.equal(options.model, 'provider/custom-model');
-  assert.equal(options.effort, 'high');
 });
 
 for (const args of [
@@ -31,7 +28,7 @@ for (const args of [
   ['review', 'custom focus'],
   ['review', '--focus-file', 'focus.txt'],
   ['adversarial-review', '--focus-file', 'focus.txt'],
-  ['review', '--effort', 'extreme'],
+  ['review', '--effort', 'high'],
   ['review', '--unknown'],
   ['review', '--base', ''],
   ['review', '--model', '  '],

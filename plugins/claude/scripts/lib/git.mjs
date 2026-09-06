@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
-import { lstat, open, readlink } from 'node:fs/promises';
+import { lstat, readFile, readlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runProcess } from './process.mjs';
-import { collectContext } from './context.mjs';
 
 const maxContextBytes = 1024 * 1024;
 
@@ -26,19 +25,27 @@ export function fingerprint(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-export async function collectReview(repo, options) {
-  const { scope, base } = await resolveReviewTarget(repo, options);
-  const captured = await collectContext(
-    (write) =>
-      scope === 'branch'
-        ? branchContext(repo, base, write)
-        : workingContext(repo, write),
-    options,
-  );
+export async function collectReview(repo, options = {}) {
+  const target = await resolveReviewTarget(repo, options);
+  if (options.command === 'review')
+    return {
+      ...target,
+      context: 'Inspect the target diff using read-only Git commands.',
+      inputMode: 'self-collect',
+    };
+  const details =
+    target.scope === 'branch'
+      ? await branchContext(repo, target.base)
+      : await workingContext(repo);
   return {
-    scope,
-    base,
-    ...captured,
+    ...target,
+    ...details,
+    collectionGuidance:
+      details.inputMode === 'inline-diff'
+        ? 'Use the repository context below as primary evidence.'
+        : 'The repository context below is a lightweight summary. ' +
+          'Inspect the target diff yourself with read-only git commands ' +
+          'before finalizing findings.',
   };
 }
 
@@ -90,12 +97,53 @@ const diffFlags = [
   'diff',
   '--no-ext-diff',
   '--no-textconv',
-  '--no-color',
-  '--full-index',
-  '--unified=5',
+  '--binary',
+  '--submodule=diff',
 ];
+const inlineBytes = 256 * 1024;
 
-async function branchContext(repo, base, write) {
+async function diffContext(repo, sections, files) {
+  const parts = [];
+  let bytes = 0;
+  if (files.length <= 2) {
+    for (const [label, args] of sections) {
+      parts.push(`${label}\n`);
+      await git(repo, [...diffFlags, ...args, '--'], {
+        captureStdout: false,
+        onStdout(chunk) {
+          bytes += Buffer.byteLength(chunk);
+          if (bytes <= inlineBytes) parts.push(chunk);
+        },
+      });
+    }
+    if (bytes <= inlineBytes)
+      return { context: parts.join(''), inputMode: 'inline-diff' };
+  }
+  const stats = [];
+  for (const [label, args] of sections) {
+    stats.push(
+      label,
+      await git(repo, [
+        'diff',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--stat',
+        ...args,
+        '--',
+      ]),
+    );
+  }
+  return {
+    context: [
+      ...stats,
+      'Changed Files',
+      ...files.map((file) => JSON.stringify(file)),
+    ].join('\n'),
+    inputMode: 'self-collect',
+  };
+}
+
+async function branchContext(repo, base) {
   const revision = (
     await git(repo, [
       'rev-parse',
@@ -105,73 +153,71 @@ async function branchContext(repo, base, write) {
     ])
   ).trim();
   const mergeBase = (await git(repo, ['merge-base', revision, 'HEAD'])).trim();
-  await git(repo, [...diffFlags, `${mergeBase}...HEAD`, '--'], {
-    captureStdout: false,
-    onStdout: write,
-  });
+  const range = `${mergeBase}..HEAD`;
+  const files = (await git(repo, ['diff', '--name-only', '-z', range, '--']))
+    .split('\0')
+    .filter(Boolean);
+  const details = await diffContext(repo, [['Branch Diff', [range]]], files);
+  const log = await git(repo, ['log', '--oneline', range, '--']);
+  return { ...details, context: `Commit Log\n${log}\n${details.context}` };
 }
 
-async function workingContext(repo, write) {
-  await diffSection(
-    repo,
-    [...diffFlags, '--cached', '--'],
-    'STAGED CHANGES (index)',
-    write,
-  );
-  await diffSection(
-    repo,
-    [...diffFlags, '--'],
-    'UNSTAGED CHANGES (relative to index)',
-    write,
-  );
-  const files = (
+async function workingContext(repo) {
+  const untracked = (
     await git(repo, ['ls-files', '--others', '--exclude-standard', '-z'])
   )
     .split('\0')
     .filter(Boolean);
-  for (const file of files) {
-    await untrackedFile(repo, file, write);
-  }
+  const staged = await git(repo, ['diff', '--cached', '--name-only', '-z']);
+  const unstaged = await git(repo, ['diff', '--name-only', '-z']);
+  const files = [
+    ...new Set(
+      [...staged.split('\0'), ...unstaged.split('\0'), ...untracked].filter(
+        Boolean,
+      ),
+    ),
+  ];
+  const details = await diffContext(
+    repo,
+    [
+      ['STAGED CHANGES (index)', ['--cached']],
+      ['UNSTAGED CHANGES (relative to index)', []],
+    ],
+    files,
+  );
+  const status = await git(repo, [
+    'status',
+    '--short',
+    '--untracked-files=all',
+  ]);
+  const contents = await Promise.all(
+    untracked.map((file) => untrackedFile(repo, file)),
+  );
+  return {
+    ...details,
+    context: [status, details.context, ...contents].join('\n'),
+  };
 }
 
-async function diffSection(repo, args, label, write) {
-  let first = true;
-  await git(repo, args, {
-    captureStdout: false,
-    onStdout(chunk) {
-      if (first) write(`${label}\n`);
-      first = false;
-      write(chunk);
-    },
-  });
-  if (!first) write('\n');
-}
-
-async function untrackedFile(repo, file, write) {
+async function untrackedFile(repo, file) {
   const path = join(repo, file);
-  const stat = await lstat(path);
-  write(`UNTRACKED FILE ${JSON.stringify(file)}\n`);
-  if (stat.isSymbolicLink())
-    return write(`Symlink target: ${await readlink(path)}\n`);
-  if (!stat.isFile())
-    return write('Non-regular file; contents not reviewed.\n');
-  const handle = await open(path, 'r');
+  const title = `UNTRACKED FILE ${JSON.stringify(file)}\n`;
   try {
-    let binary = false;
-    const hash = createHash('sha256');
-    for await (const chunk of handle.createReadStream({ autoClose: false })) {
-      binary ||= chunk.includes(0);
-      hash.update(chunk);
-    }
-    if (binary) {
-      write('Binary file; contents not reviewed.\n');
-      write(`SHA-256: ${hash.digest('hex')}`);
-    } else {
-      const stream = handle.createReadStream({ start: 0, autoClose: false });
-      for await (const chunk of stream) write(chunk);
-    }
-    write('\n');
-  } finally {
-    await handle.close();
+    const info = await lstat(path);
+    if (info.isSymbolicLink())
+      return title + `Symlink target: ${await readlink(path)}`;
+    if (!info.isFile())
+      return title + 'Non-regular file; contents not reviewed.';
+    if (info.size > 24 * 1024)
+      return title + '(skipped: exceeds 24576 byte limit)';
+    const data = await readFile(path);
+    return (
+      title +
+      (data.includes(0)
+        ? 'Binary file; contents not reviewed.'
+        : data.toString('utf8'))
+    );
+  } catch {
+    return title + '(skipped: unreadable file)';
   }
 }

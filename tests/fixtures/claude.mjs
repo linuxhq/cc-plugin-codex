@@ -22,6 +22,7 @@ const structuredReview = JSON.stringify({
 });
 if (args[0] === '--version') {
   console.log('2.1.236 (Fake Claude Code)');
+  if (mode === 'unavailable') process.exitCode = 1;
 } else if (args[0] === 'auth') {
   console.log(JSON.stringify({ loggedIn: mode !== 'unauthenticated' }));
   if (mode === 'unauthenticated') process.exitCode = 1;

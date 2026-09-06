@@ -11,6 +11,8 @@ Adapted files:
 - scripts/lib/status.mjs (status conventions from upstream runtime)
 - skills/review/SKILL.md (upstream commands/review.md)
 - skills/adversarial-review/SKILL.md (upstream commands/adversarial-review.md)
+- prompts/stop-review-gate.md
+- scripts/lib/gate.mjs (gate behavior adapted from upstream Stop hook)
 - prompts/adversarial-review.md
 - schemas/review-output.schema.json
 - scripts/lib/git.mjs (target selection adapted from upstream scripts/lib/git.mjs)

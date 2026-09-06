@@ -1,7 +1,8 @@
 import { readGateConfig } from './gate-config.mjs';
 import { repositoryRoot } from './git.mjs';
 import { prepareJob } from './jobs.mjs';
-import { beginTurn, collectTurn } from './turn.mjs';
+import { runProcess } from './process.mjs';
+import { active, sessionJobs } from './status.mjs';
 import { storeRoot } from './store.mjs';
 import { executeJob } from './worker.mjs';
 
@@ -19,8 +20,8 @@ export function gateFailure(message) {
 export function parseGateOutput(output) {
   const text = String(output ?? '').trim();
   const firstLine = text.split(/\r?\n/, 1)[0];
-  if (/^ALLOW: \S.*$/.test(firstLine)) return {};
-  if (/^BLOCK: \S.*$/.test(firstLine)) {
+  if (firstLine.startsWith('ALLOW:')) return {};
+  if (firstLine.startsWith('BLOCK:')) {
     return {
       decision: 'block',
       reason:
@@ -32,9 +33,7 @@ export function parseGateOutput(output) {
 }
 
 export async function runGate(input) {
-  if (!input || Array.isArray(input) || typeof input !== 'object')
-    throw new Error('Expected a hook event object.');
-  if (!['Stop', 'UserPromptSubmit'].includes(input.hook_event_name)) return {};
+  if (input.hook_event_name !== 'Stop') return {};
   let repo;
   try {
     repo = await repositoryRoot(input.cwd || process.cwd());
@@ -46,39 +45,45 @@ export async function runGate(input) {
     };
   }
   const root = storeRoot(repo);
-  if (!(await readGateConfig(root)).enabled) return {};
-  if (input.hook_event_name === 'UserPromptSubmit') {
-    await beginTurn(repo, root, input);
-    return {};
+  const running = (await sessionJobs(root)).find(active);
+  const note = running
+    ? `Claude job ${running.id} is still running. ` +
+      `Check $claude:status or use $claude:cancel ${running.id}.`
+    : '';
+  if (!(await readGateConfig(root)).enabled)
+    return note ? { systemMessage: note } : {};
+  try {
+    const available = await runProcess('claude', ['--version']);
+    if (available.code !== 0) throw new Error('Claude is unavailable.');
+  } catch {
+    return {
+      systemMessage: [
+        'Claude is not set up for the review gate. Run $claude:setup.',
+        note,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    };
   }
-  // Codex invokes Stop again after following a blocking hook's feedback.
-  if (input.stop_hook_active === true)
-    return {
-      systemMessage:
-        'Claude review gate skipped the continuation to prevent a ' +
-        'review loop. Use $claude:review to verify fixes.',
-    };
-  const target = await collectTurn(repo, root, input);
-  if (!target)
-    return {
-      systemMessage:
-        'Claude review skipped: no starting snapshot for this turn. ' +
-        'Start a new turn with the UserPromptSubmit hook enabled and trusted.',
-    };
-  return reviewTurn(repo, root, target, input.session_id);
+  const decision = await reviewResponse(repo, root, input);
+  if (note) {
+    if (decision.reason) decision.reason = `${note}\n${decision.reason}`;
+    else decision.systemMessage = note;
+  }
+  return decision;
 }
 
-async function reviewTurn(repo, root, target, sessionId) {
+async function reviewResponse(repo, root, input) {
   const job = await prepareJob(
     repo,
     root,
     {
       command: 'stop-review-gate',
-      sessionId,
+      sessionId: input.session_id,
+      focus: String(input.last_assistant_message ?? '').trim(),
     },
-    target,
+    { scope: 'response' },
   );
-  if (!job) return {};
   const completed = await executeJob(root, job.id);
   if (completed.state !== 'completed')
     return gateFailure(

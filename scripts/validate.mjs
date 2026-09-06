@@ -35,7 +35,6 @@ for (const path of [
   'scripts/claude-review.mjs',
   'scripts/worker.mjs',
   'prompts/review.md',
-  'prompts/findings-format.md',
   'prompts/adversarial-review.md',
   'schemas/review-output.schema.json',
   'LICENSE',
@@ -54,10 +53,6 @@ assert.equal(
   'node "${PLUGIN_ROOT}/scripts/stop-review-gate-hook.mjs"',
 );
 assert.equal(stop.timeout, 900);
-const start = hooks.hooks.UserPromptSubmit[0].hooks[0];
-assert.equal(start.type, 'command');
-assert.equal(start.command, stop.command);
-assert.equal(start.timeout, 60);
 assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Use default hook discovery');
 console.log(
   `Validated plugin, marketplace, and ${names.length} command skills.`,

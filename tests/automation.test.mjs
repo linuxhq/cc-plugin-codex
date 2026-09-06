@@ -133,8 +133,8 @@ test('JSON handles setup, empty reviews, and errors', async (t) => {
   const f = await fixture(t);
   const ready = await f.run(['setup', '--json']);
   assert.equal(JSON.parse(ready.stdout).ready, true);
-  const empty = await f.run(['review', '--json']);
-  assert.equal(JSON.parse(empty.stdout).skipped, true);
+  const review = await f.run(['review', '--json']);
+  assert.equal(JSON.parse(review.stdout).job.state, 'completed');
   for (const args of [
     ['status', '--wait', '--json'],
     ['review', '--cwd', '/no/such/path', '--json'],

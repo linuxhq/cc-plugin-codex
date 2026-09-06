@@ -20,16 +20,19 @@ test('foreground review preserves focus and leaves Git alone', async (t) => {
   assert.ok(!(await readdir(f.repo)).includes('injected'));
   assert.match((await f.run(['result', id])).stdout, /Example finding/);
   await f.write('app.js', 'changed after review\n');
-  assert.match((await f.run(['result', id])).stdout, /target has changed/);
+  assert.doesNotMatch(
+    (await f.run(['result', id])).stdout,
+    /target has changed/,
+  );
 });
 
-test('empty review skips Claude and creates no job', async (t) => {
+test('explicit empty review still invokes the reviewer', async (t) => {
   const f = await fixture(t);
   const run = await f.run(['review']);
   assert.equal(run.code, 0);
-  assert.match(run.stdout, /No changes to review/);
-  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
-  assert.match((await f.run(['status'])).stdout, /No review jobs/);
+  assert.match(run.stdout, /Example finding/);
+  const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+  assert.match(request.input, /Inspect the target diff/);
 });
 
 test('provider failures and malformed output remain failed jobs', async (t) => {
@@ -53,7 +56,7 @@ test('background worker completes and exposes stored results', async (t) => {
     return (await f.run(['status', id])).stdout.includes('completed');
   });
   assert.match((await f.run(['result', id])).stdout, /Example finding/);
-  assert.match((await f.run(['cancel', id])).stdout, /already completed/);
+  assert.match((await f.run(['cancel', id])).stderr, /No active job/);
 });
 
 test('prints and persists provider diagnostics', async (t) => {

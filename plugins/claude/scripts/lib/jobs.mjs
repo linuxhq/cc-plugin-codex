@@ -19,22 +19,16 @@ import {
 } from './store.mjs';
 
 export async function prepareJob(repo, root, options, target) {
-  target ??= await collectReview(repo, { ...options, contextRoot: root });
-  if (!target.context) return null;
+  target ??= await collectReview(repo, options);
   const prompt = await buildPrompt(options.command, target, options.focus);
   return createJob(root, {
     repo,
     command: options.command,
     sessionId: options.sessionId || currentSessionId(),
     model: options.model,
-    effort: options.effort,
     target: {
       scope: target.scope,
       base: target.base,
-      fingerprint: target.fingerprint,
-      contextDirectory: target.contextDirectory,
-      contextPath: target.contextPath,
-      contextBytes: target.contextBytes,
       inputMode: target.inputMode,
     },
     prompt,
@@ -68,7 +62,13 @@ export async function selectJob(root, id) {
 }
 
 export async function selectResultJob(root, id) {
-  if (id) return selectJob(root, id);
+  if (id) {
+    const job = await selectJob(root, id);
+    const state = await jobState(root, job);
+    if (active({ state }))
+      throw new Error(`Job ${id} is still ${state}. Check $claude:status.`);
+    return job;
+  }
   const jobs = await sessionJobs(root);
   const finished = jobs.find((job) => !active(job));
   if (finished) return finished;
@@ -81,7 +81,12 @@ export async function selectResultJob(root, id) {
 }
 
 export async function selectCancelableJob(root, id) {
-  if (id) return selectJob(root, id);
+  if (id) {
+    const job = await selectJob(root, id);
+    const state = await jobState(root, job);
+    if (!active({ state })) throw new Error(`No active job found for ${id}.`);
+    return job;
+  }
   const jobs = (await sessionJobs(root)).filter(active);
   if (jobs.length === 1) return jobs[0];
   if (jobs.length > 1)
@@ -118,22 +123,5 @@ export async function result(root, id) {
       failed: ['failed', 'cancelled', 'interrupted'].includes(state),
     };
   }
-  let warning = '';
-  try {
-    if (job.target.scope === 'turn') {
-      return { text: `${job.output}\n\nReview job: ${job.id}`, failed: false };
-    }
-    const current = await collectReview(job.repo, {
-      ...job.target,
-      fingerprintOnly: true,
-    });
-    if (current.fingerprint !== job.target.fingerprint)
-      warning = 'Review target has changed since this run.\n\n';
-  } catch {
-    warning = 'Could not verify whether the review target has changed.\n\n';
-  }
-  return {
-    text: `${warning}${job.output}\n\nReview job: ${job.id}`,
-    failed: false,
-  };
+  return { text: `${job.output}\n\nReview job: ${job.id}`, failed: false };
 }

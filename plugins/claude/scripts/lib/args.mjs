@@ -45,8 +45,8 @@ function parseJob(command, args) {
     const number = Number(values[key]);
     if (!/^\d+$/.test(values[key]) || !Number.isSafeInteger(number))
       throw new Error(`--${key} must be a nonnegative integer.`);
-    if (key === 'poll-interval-ms' && number < 50)
-      throw new Error('--poll-interval-ms must be at least 50.');
+    if (key === 'poll-interval-ms' && number < 100)
+      throw new Error('--poll-interval-ms must be at least 100.');
     values[key] = number;
   }
   return { command, ...values, id: positionals[0] };
@@ -81,19 +81,12 @@ function parseReview(command, args) {
       base: { type: 'string' },
       scope: { type: 'string', default: 'auto' },
       model: { type: 'string', short: 'm' },
-      effort: { type: 'string' },
       background: { type: 'boolean', default: false },
       wait: { type: 'boolean', default: false },
     },
   });
   validateCommon(values);
   validateScope(values);
-  if (
-    values.effort &&
-    !['low', 'medium', 'high', 'xhigh', 'max'].includes(values.effort)
-  ) {
-    throw new Error('Effort must be low, medium, high, xhigh, or max.');
-  }
   if (command === 'review' && positionals.length) {
     throw new Error('Use adversarial-review for custom focus text.');
   }
@@ -101,7 +94,7 @@ function parseReview(command, args) {
 }
 
 function validateScope(values) {
-  for (const key of ['base', 'model', 'effort']) {
+  for (const key of ['base', 'model']) {
     if (values[key] !== undefined && !values[key].trim()) {
       throw new Error(`--${key} cannot be empty.`);
     }
@@ -123,8 +116,8 @@ result [JOB_ID]
 cancel [JOB_ID]
 
 All commands accept --cwd PATH (-C) and --json (except help).
-Both reviews accept --model MODEL (-m) and --effort low|medium|high|xhigh|max.
-Defaults: foreground, Claude's configured model/effort, auto scope.
+Both reviews accept --model MODEL (-m).
+Defaults: foreground, Claude's configured defaults, auto scope.
 Auto reviews local changes when dirty, otherwise the branch against its base.
 Passing --base selects branch scope; otherwise branch scope detects the base.
 `;

@@ -49,10 +49,10 @@ export function runProcess(command, args, options = {}) {
       failure = error;
     });
     const abort = () => stop(new Error('Review cancelled.'));
-    const timer = setTimeout(
-      () => stop(new Error('Subprocess timed out.')),
-      timeout,
-    );
+    const timer =
+      timeout === null
+        ? null
+        : setTimeout(() => stop(new Error('Subprocess timed out.')), timeout);
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
     child.on('close', (code) => {

@@ -16,27 +16,21 @@ export async function buildPrompt(command, target, focus = '') {
   );
   if (command === 'adversarial-review')
     return adversarialPrompt(instructions, target, focus);
-  const format = await readFile(
-    new URL('../../prompts/findings-format.md', import.meta.url),
-    'utf8',
-  );
+  if (command === 'stop-review-gate') {
+    const response = focus ? `Previous Codex response:\n${focus}` : '';
+    return {
+      system:
+        'Review the previous Codex turn using read-only repository ' +
+        'inspection. Do not edit files.',
+      input: instructions.replace('{{CODEX_RESPONSE_BLOCK}}', () => response),
+    };
+  }
   return {
-    system:
-      command === 'stop-review-gate'
-        ? `${instructions}\n${format}`
-        : instructions,
-    input: [
-      `Review scope: ${target.scope}`,
-      ...(target.base ? [`Base reference: ${target.base}`] : []),
-      ...(command === 'stop-review-gate'
-        ? []
-        : [`User focus: ${JSON.stringify(focus)}`]),
-      '',
-      'BEGIN REVIEW DATA',
+    system: instructions,
+    input:
+      `Review scope: ${target.scope}\n` +
+      (target.base ? `Base reference: ${target.base}\n` : '') +
       target.context,
-      'END REVIEW DATA',
-      '',
-    ].join('\n'),
   };
 }
 
@@ -48,9 +42,11 @@ export function claudeArgs(job) {
     '--verbose',
     '--include-partial-messages',
     '--tools',
-    'Read,Glob,Grep',
+    'Read,Glob,Grep,Bash',
     '--allowedTools',
-    'Read,Glob,Grep',
+    'Read,Glob,Grep,Bash(git diff *),Bash(git status *),' +
+      'Bash(git log *),Bash(git show *),Bash(git ls-files *),' +
+      'Bash(git merge-base *),Bash(git rev-parse *)',
     '--disallowedTools',
     'mcp__*',
     '--permission-mode',
@@ -69,10 +65,7 @@ export function claudeArgs(job) {
   ];
   if (job.command === 'adversarial-review')
     args.push('--json-schema', JSON.stringify(schema));
-  if (job.target?.contextDirectory)
-    args.push('--add-dir', job.target.contextDirectory);
   if (job.model) args.push('--model', job.model);
-  if (job.effort) args.push('--effort', job.effort);
   return args;
 }
 
@@ -81,8 +74,7 @@ export async function reviewWithClaude(job, signal, onProgress) {
   const result = await runProcess('claude', claudeArgs(job), {
     cwd: job.repo,
     input: job.prompt.input,
-    timeout:
-      job.command === 'stop-review-gate' ? 14 * 60 * 1000 : 20 * 60 * 1000,
+    timeout: job.command === 'stop-review-gate' ? 15 * 60 * 1000 : null,
     signal,
     captureStdout: false,
     onStdout: stream.write,

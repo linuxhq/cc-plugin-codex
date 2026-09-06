@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir, stat, symlink } from 'node:fs/promises';
+import { readdir, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { collectReview } from '../plugins/claude/scripts/lib/git.mjs';
@@ -12,6 +12,11 @@ test('captures all working layers, excluding ignored files', async (t) => {
   await f.write('app.js', 'export const value = 3;\n');
   await f.write('new file\nwith newline.js', 'untracked content\n');
   await f.write('.gitignore', 'secret.txt\n');
+  await f.git('add', '.gitignore');
+  await f.git('commit', '-m', 'Ignore secret');
+  await f.write('app.js', 'export const value = 2;\n');
+  await f.git('add', 'app.js');
+  await f.write('app.js', 'export const value = 3;\n');
   await f.write('secret.txt', 'do not include');
   const target = await collectReview(f.repo, {});
   assert.match(target.context, /STAGED CHANGES/);
@@ -50,7 +55,7 @@ test('branch review excludes dirty files and rejects bad refs', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', 'dirty\n');
   const target = await collectReview(f.repo, { base: 'main' });
-  assert.equal(target.context, '');
+  assert.doesNotMatch(target.context, /dirty/);
   await assert.rejects(collectReview(f.repo, { base: '--help' }));
 });
 
@@ -67,7 +72,7 @@ test('auto reviews committed changes with a detected base', async (t) => {
     assert.match(target.context, /feature change/);
   }
   const working = await collectReview(f.repo, { scope: 'working-tree' });
-  assert.equal(working.context, '');
+  assert.doesNotMatch(working.context, /feature change/);
   const explicit = await collectReview(f.repo, {
     scope: 'working-tree',
     base: 'main',
@@ -85,34 +90,17 @@ test('describes symlinks without following their targets', async (t) => {
   assert.match(target.context, /Binary file; contents not reviewed/);
 });
 
-test('large untracked files retain a complete private snapshot', async (t) => {
+test('large untracked files are omitted without saved patches', async (t) => {
   const f = await fixture(t);
-  const contents = 'large change é\n'.repeat(200_000) + 'FINAL_SENTINEL\n';
-  await f.write('large.txt', contents);
-  const options = { contextRoot: f.root };
-  const target = await collectReview(f.repo, options);
-  assert.equal(target.inputMode, 'file');
-  assert.ok(target.context.length < 2048);
-  const snapshot = await readFile(target.contextPath, 'utf8');
-  assert.equal(snapshot, `UNTRACKED FILE "large.txt"\n${contents}\n`);
-  assert.equal((await stat(target.contextPath)).mode & 0o777, 0o600);
-  assert.equal((await stat(target.contextDirectory)).mode & 0o777, 0o700);
+  await f.write('large.txt', 'large change\n'.repeat(200_000));
   const before = await readdir(f.root);
-  const check = await collectReview(f.repo, {
-    ...options,
-    fingerprintOnly: true,
-  });
-  assert.equal(check.fingerprint, target.fingerprint);
+  const target = await collectReview(f.repo);
+  assert.match(target.context, /skipped: exceeds 24576 byte limit/);
+  assert.ok(target.context.length < 2048);
   assert.deepEqual(await readdir(f.root), before);
-  await f.write('large.txt', 'edited after launch\n');
-  assert.equal(await readFile(target.contextPath, 'utf8'), snapshot);
-  assert.notEqual(
-    (await collectReview(f.repo, options)).fingerprint,
-    target.fingerprint,
-  );
 });
 
-test('large staged and branch patches stream without truncation', async (t) => {
+test('large staged and branch patches use Git summaries', async (t) => {
   const f = await fixture(t);
   await f.git('checkout', '-b', 'feature');
   await f.write(
@@ -120,28 +108,24 @@ test('large staged and branch patches stream without truncation', async (t) => {
     'export const item = 1;\n'.repeat(150_000) + 'TAIL\n',
   );
   await f.git('add', '.');
-  const options = { contextRoot: f.root };
-  const staged = await collectReview(f.repo, options);
-  assert.equal(staged.inputMode, 'file');
-  assert.match(await readFile(staged.contextPath, 'utf8'), /\+TAIL/);
+  const staged = await collectReview(f.repo);
+  assert.equal(staged.inputMode, 'self-collect');
+  assert.match(staged.context, /app.js/);
+  assert.doesNotMatch(staged.context, /\+TAIL/);
   await f.git('commit', '-m', 'Large feature');
-  const branch = await collectReview(f.repo, { ...options, base: 'main' });
-  assert.equal(branch.inputMode, 'file');
-  assert.match(await readFile(branch.contextPath, 'utf8'), /\+TAIL/);
+  const branch = await collectReview(f.repo, { base: 'main' });
+  assert.equal(branch.inputMode, 'self-collect');
+  assert.match(branch.context, /app.js/);
+  assert.doesNotMatch(branch.context, /\+TAIL/);
 });
 
-test('fingerprints detect binary content changes', async (t) => {
+test('more than two files uses summary even for tiny patches', async (t) => {
   const f = await fixture(t);
-  await f.write('binary.bin', Buffer.from([0, 1, 2]));
-  const untracked = await collectReview(f.repo, {});
-  await f.write('binary.bin', Buffer.from([0, 3, 4]));
-  const updated = await collectReview(f.repo, {});
-  assert.notEqual(untracked.fingerprint, updated.fingerprint);
-  await f.git('add', 'binary.bin');
-  await f.git('commit', '-m', 'Binary');
-  await f.write('binary.bin', Buffer.from([0, 5, 6]));
-  const tracked = await collectReview(f.repo, {});
-  await f.write('binary.bin', Buffer.from([0, 7, 8]));
-  const changed = await collectReview(f.repo, {});
-  assert.notEqual(tracked.fingerprint, changed.fingerprint);
+  await f.write('one', 'one');
+  await f.write('two', 'two');
+  await f.write('three', 'three');
+  await f.git('add', '.');
+  const target = await collectReview(f.repo);
+  assert.equal(target.inputMode, 'self-collect');
+  assert.match(target.collectionGuidance, /Inspect the target diff yourself/);
 });

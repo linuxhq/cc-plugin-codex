@@ -71,3 +71,19 @@ test('a stream consumer failure terminates its child', async () => {
     /Consumer failed/,
   );
 });
+
+test('a review without a deadline can still be cancelled', async () => {
+  const controller = new AbortController();
+  const pending = runProcess(
+    process.execPath,
+    ['-e', "process.stdout.write('ready'); setInterval(() => {}, 100)"],
+    {
+      timeout: null,
+      signal: controller.signal,
+      onStdout() {
+        controller.abort();
+      },
+    },
+  );
+  await assert.rejects(pending, /cancelled/);
+});

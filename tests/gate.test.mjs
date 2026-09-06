@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
 import { parseGateOutput } from '../plugins/claude/scripts/lib/gate.mjs';
-import { eventually, extractId, fixture as baseFixture } from './helpers.mjs';
+import { eventually, extractId, fixture } from './helpers.mjs';
 
 const plugin = fileURLToPath(new URL('../plugins/claude/', import.meta.url));
 const hook = join(plugin, 'scripts/stop-review-gate-hook.mjs');
@@ -31,20 +31,6 @@ function runHook(f, input = {}, env = {}) {
       ...input,
     }),
   });
-}
-
-async function fixture(t) {
-  const f = await baseFixture(t);
-  const run = f.run;
-  f.run = async (args, env) => {
-    const result = await run(args, env);
-    if (args.includes('--enable-review-gate') && result.code === 0) {
-      const start = await runHook(f, { hook_event_name: 'UserPromptSubmit' });
-      assert.deepEqual(JSON.parse(start.stdout), {});
-    }
-    return result;
-  };
-  return f;
 }
 
 test('disabled gate starts no review and creates no state', async (t) => {
@@ -125,21 +111,25 @@ test('bundled command handles spaces and stores findings', async (t) => {
   );
   assert.match((await f.run(['result', id])).stdout, /P2 app.js:1 example/);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
-  assert.ok(!request.input.includes('$(touch injected)'));
-  assert.ok(request.input.includes('export const value = 0'));
+  assert.ok(request.input.includes('$(touch injected)'));
+  assert.ok(
+    request.input.includes(
+      'Only direct edits made in that specific turn count.',
+    ),
+  );
   assert.equal(request.cwd, f.repo);
   assert.ok(!(await readdir(f.repo)).includes('injected'));
   assert.match((await f.run(['status', id])).stdout, /stop-review-gate/);
 });
 
-test('clean checkout skips Claude despite provider failure', async (t) => {
+test('clean checkout still runs the response review', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
   const output = await runHook(f, {}, { FAKE_CLAUDE_MODE: 'fail' });
   assert.equal(output.code, 0);
-  assert.deepEqual(JSON.parse(output.stdout), {});
-  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
-  assert.match((await f.run(['status'])).stdout, /No review jobs/);
+  assert.equal(JSON.parse(output.stdout).decision, 'block');
+  const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+  assert.match(request.input, /Updated app.js/);
 });
 
 test('ALLOW passes for a checkout with changes', async (t) => {
@@ -158,22 +148,24 @@ test('ALLOW passes for a checkout with changes', async (t) => {
   assert.match((await f.run(['result'])).stdout, /ALLOW:/);
 });
 
-test('continued turns and unrelated events skip reviews', async (t) => {
+test('continued turns run reviews; unrelated events do not', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);
-  const output = await runHook(f, { stop_hook_active: true });
-  assert.equal(JSON.parse(output.stdout).decision, undefined);
-  assert.match(JSON.parse(output.stdout).systemMessage, /review loop/);
-  assert.deepEqual(
-    JSON.parse(
-      (
-        await runHook(f, {
-          hook_event_name: 'SessionStart',
-        })
-      ).stdout,
-    ),
-    {},
+  const output = await runHook(
+    f,
+    { stop_hook_active: true },
+    {
+      FAKE_CLAUDE_OUTPUT: 'BLOCK: Still needs fixing',
+    },
   );
+  assert.equal(JSON.parse(output.stdout).decision, 'block');
+  await rm(f.env.FAKE_CLAUDE_CAPTURE);
+  for (const hook_event_name of ['UserPromptSubmit', 'SessionStart']) {
+    assert.deepEqual(
+      JSON.parse((await runHook(f, { hook_event_name })).stdout),
+      {},
+    );
+  }
   await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
 });
 
@@ -267,16 +259,44 @@ test('corrupt configuration surfaces feedback and can be reset', async (t) => {
   assert.deepEqual(JSON.parse((await runHook(f)).stdout), {});
 });
 
-test('only an explicit ALLOW with a reason passes the decision parser', () => {
+test('decision parser matches upstream ALLOW and BLOCK prefixes', () => {
   for (const output of [
     '',
-    'ALLOW:',
-    'ALLOW: ',
     'BLOCK:',
     'Here is my review\nALLOW: fine',
     '```\nALLOW: fine\n```',
   ]) {
     assert.equal(parseGateOutput(output).decision, 'block');
   }
+  assert.deepEqual(parseGateOutput('ALLOW:'), {});
   assert.deepEqual(parseGateOutput('ALLOW: No findings.\r\nLimitations.'), {});
+});
+
+test('unavailable CLI reports setup guidance without blocking', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  const output = await runHook(f, {}, { FAKE_CLAUDE_MODE: 'unavailable' });
+  const decision = JSON.parse(output.stdout);
+  assert.equal(decision.decision, undefined);
+  assert.match(decision.systemMessage, /Run \$claude:setup/);
+  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
+});
+
+test('reporting turns use the response review', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  await f.write('app.js', 'OLD_CONTENT_SENTINEL\n');
+  const message = 'The setup check completed. No code was edited.';
+  const output = await runHook(
+    f,
+    { last_assistant_message: message },
+    {
+      FAKE_CLAUDE_OUTPUT: 'ALLOW: Reporting only',
+    },
+  );
+  assert.deepEqual(JSON.parse(output.stdout), {});
+  const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+  assert.ok(request.input.includes(message));
+  assert.match(request.input, /Pure status, setup, or reporting output/);
+  assert.ok(!request.input.includes('OLD_CONTENT_SENTINEL'));
 });
