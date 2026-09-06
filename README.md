@@ -53,8 +53,10 @@ The default `--scope auto` reviews staged, unstaged, and untracked changes when
 the checkout is dirty; otherwise it reviews the branch against the detected
 default branch. `--scope working-tree` and `--scope branch` select the scope
 explicitly. `--base REF` selects branch review and takes precedence over scope.
-Small adversarial reviews include the diff; larger reviews provide a summary and
-ask Claude to inspect the diff directly.
+When origin HEAD is available, its remote branch is used even if no matching
+local branch exists; this corrects a bug in the pinned upstream baseline. Small
+adversarial reviews include the diff; larger reviews provide a summary and ask
+Claude to inspect the diff directly.
 
 Use `--wait` for foreground execution or `--background` to return a job ID.
 Without either flag, the skill asks once, recommending waiting for clearly tiny
@@ -195,17 +197,20 @@ implementation differences are:
   permission settings still apply; these are different from Codex's sandbox.
 - Background execution uses a detached Node worker. The launcher saves a private
   prompt file and returns after spawning; the worker owns execution state and
-  deletes the prompt after reading it. Startup/execution errors appear in job
-  results or the worker log. There is no prompt acknowledgment deadline.
+  deletes the prompt after reading it. All Claude runs use a process supervisor
+  that stops Claude if its owning worker dies. Startup/execution errors appear
+  in job results or the worker log. There is no prompt acknowledgment deadline.
 - Conversation transfer seeds context instead of importing native turns, as
   described above.
 
 Runtime records are stored outside the checkout under
 `~/.codex/plugins/data/claude-review/jobs/`, grouped by checkout, with private
 permissions. History uses a 50-job budget, keeping the most recently updated
-finished jobs after counting unfinished jobs. Active worker records are never
-pruned because workers need them for cancellation and completion; more than 50
-unfinished workers can therefore exceed the budget. `CLAUDE_REVIEW_DATA_DIR`
+finished jobs after counting unfinished jobs. Interrupted records are eligible
+for pruning. Active worker records are never pruned because workers need them
+for cancellation and completion. At least one finished result is retained even
+when active workers fill the budget, so the latest completion remains
+retrievable; this can exceed the 50-job budget. `CLAUDE_REVIEW_DATA_DIR`
 overrides that location. Records and Claude's persistent rescue, gate, and
 transfer sessions can contain source code. Review restrictions are not an
 operating-system sandbox. Review supplied content before sending it; transcripts

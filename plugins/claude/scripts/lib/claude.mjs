@@ -175,7 +175,7 @@ async function executeReview(job, signal, onProgress) {
     timeout: job.command === 'stop-review-gate' ? gateReviewTimeout : null,
     signal,
     captureStdout: false,
-    supervise: Boolean(job.write),
+    supervise: true,
     onStdout: stream.write,
   });
   const raw = stream.finish();

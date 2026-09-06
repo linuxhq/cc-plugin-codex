@@ -14,6 +14,31 @@ import {
 } from '../plugins/claude/scripts/lib/store.mjs';
 import { fixture } from './helpers.mjs';
 
+test('stale workers cannot crowd out newly completed results', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const stale = await createJob(root, { repo: f.repo });
+  await saveJob(root, { ...stale, createdAt: new Date(0).toISOString() });
+  const completed = await createJob(root, { repo: f.repo });
+  await saveJob(root, { ...completed, state: 'completed' });
+  await pruneJobs(root, { maxCount: 1 });
+  assert.deepEqual(
+    (await listJobs(root)).map((job) => job.id),
+    [completed.id],
+  );
+});
+
+test('full active budget retains the latest result', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const active = await createJob(root, { repo: f.repo });
+  const completed = await createJob(root, { repo: f.repo });
+  await saveJob(root, { ...completed, state: 'completed' });
+  await pruneJobs(root, { maxCount: 1 });
+  assert.equal((await loadJob(root, active.id)).state, 'queued');
+  assert.equal((await loadJob(root, completed.id)).state, 'completed');
+});
+
 test('heartbeats distinguish stale jobs from active jobs', async (t) => {
   const f = await fixture(t);
   const root = join(f.root, 'store');

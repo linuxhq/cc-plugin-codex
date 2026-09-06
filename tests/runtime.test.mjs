@@ -1,7 +1,49 @@
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
-import { fixture, extractId, eventually } from './helpers.mjs';
+import { fixture, extractId, eventually, cli } from './helpers.mjs';
+import { spawn } from 'node:child_process';
+
+test('killing a read-only worker also stops its Claude process', async (t) => {
+  const f = await fixture(t);
+  const worker = spawn(process.execPath, [cli, 'rescue', 'inspect'], {
+    cwd: f.repo,
+    env: { ...f.env, FAKE_CLAUDE_MODE: 'slow' },
+    stdio: 'ignore',
+  });
+  let pid;
+  f.cleanup(async () => {
+    worker.kill('SIGKILL');
+    if (pid) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+    }
+  });
+  await eventually(async () => {
+    try {
+      pid = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).pid;
+      return pid;
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+
+      throw error;
+    }
+  });
+  worker.kill('SIGKILL');
+  await eventually(async () => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      if (error.code === 'ESRCH') return true;
+
+      throw error;
+    }
+  });
+});
 
 test('foreground review preserves focus and leaves Git alone', async (t) => {
   const f = await fixture(t);

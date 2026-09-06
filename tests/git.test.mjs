@@ -5,6 +5,24 @@ import test from 'node:test';
 import { collectReview } from '../plugins/claude/scripts/lib/git.mjs';
 import { fixture } from './helpers.mjs';
 
+test('origin HEAD works without a local default branch', async (t) => {
+  const f = await fixture(t);
+  await f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  await f.git(
+    'symbolic-ref',
+    'refs/remotes/origin/HEAD',
+    'refs/remotes/origin/main',
+  );
+  await f.git('checkout', '-b', 'feature');
+  await f.git('branch', '-D', 'main');
+  await f.write('app.js', 'feature change\n');
+  await f.git('add', '.');
+  await f.git('commit', '-m', 'Feature');
+  const target = await collectReview(f.repo, {});
+  assert.equal(target.base, 'origin/main');
+  assert.match(target.context, /feature change/);
+});
+
 test('captures all working layers, excluding ignored files', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', 'export const value = 2;\n');

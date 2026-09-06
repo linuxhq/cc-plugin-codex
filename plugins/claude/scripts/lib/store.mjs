@@ -146,10 +146,13 @@ export async function jobState(root, job) {
 // Active worker records must remain available for cancellation and completion.
 export async function pruneJobs(root, { maxCount = 50 } = {}) {
   const jobs = await listJobs(root);
+  const states = await Promise.all(jobs.map((job) => jobState(root, job)));
   const finished = jobs
-    .filter((job) => terminalStates.includes(job.state))
+    .filter((job, index) =>
+      [...terminalStates, 'interrupted'].includes(states[index]),
+    )
     .sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
-  const finishedLimit = Math.max(0, maxCount - (jobs.length - finished.length));
+  const finishedLimit = Math.max(1, maxCount - (jobs.length - finished.length));
   for (const [index, job] of finished.entries()) {
     if (index >= finishedLimit)
       await rm(join(root, job.id), { recursive: true, force: true });

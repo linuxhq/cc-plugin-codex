@@ -88,7 +88,7 @@ async function detectDefaultBranch(repo) {
   try {
     const ref = await git(repo, ['symbolic-ref', 'refs/remotes/origin/HEAD']);
     if (ref.trim().startsWith('refs/remotes/origin/'))
-      return ref.trim().replace('refs/remotes/origin/', '');
+      return ref.trim().replace('refs/remotes/', '');
   } catch {
     // Repositories without an origin HEAD use the conventional branch names.
   }
