@@ -10,7 +10,9 @@ import {
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { createJob } from '../plugins/claude/scripts/lib/store.mjs';
 import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
+import { fingerprint } from '../plugins/claude/scripts/lib/git.mjs';
 import { parseGateOutput } from '../plugins/claude/scripts/lib/gate.mjs';
 import { eventually, extractId, fixture } from './helpers.mjs';
 
@@ -62,14 +64,26 @@ test('toggles persist; disable works without authentication', async (t) => {
   await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
 });
 
-test('failed authentication does not enable the gate', async (t) => {
+test('gate changes persist even when Claude is not ready', async (t) => {
   const f = await fixture(t);
-  const run = await f.run(['setup', '--enable-review-gate'], {
-    FAKE_CLAUDE_MODE: 'unauthenticated',
-  });
-  assert.equal(run.code, 1);
-  assert.match(run.stderr, /claude auth login/);
-  assert.deepEqual(JSON.parse((await runHook(f)).stdout), {});
+  for (const mode of ['unauthenticated', 'unavailable']) {
+    for (const [flag, enabled] of [
+      ['--enable-review-gate', true],
+      ['--disable-review-gate', false],
+    ]) {
+      const run = await f.run(['setup', flag, '--json'], {
+        FAKE_CLAUDE_MODE: mode,
+      });
+      assert.equal(run.code, 0, run.stderr);
+      const report = JSON.parse(run.stdout);
+      assert.equal(report.ready, false);
+      assert.equal(report.gate.enabled, enabled);
+      assert.match(report.message, /claude auth login|Install or repair/);
+      const saved = JSON.parse((await f.run(['setup', '--json'])).stdout);
+      assert.equal(saved.gate.enabled, enabled);
+    }
+  }
+  await assert.rejects(readFile(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
 });
 
 test('bundled command handles spaces and stores findings', async (t) => {
@@ -219,7 +233,7 @@ test('gate preserves diagnostics from both streams', async (t) => {
   assert.match(decision.reason, /Account quota exhausted/);
   assert.match(decision.reason, /Request could not complete/);
   const saved = await f.run(['result', extractId(decision.reason)]);
-  assert.equal(saved.code, 1);
+  assert.equal(saved.code, 0);
   assert.match(saved.stdout, /Provider request failed/);
 });
 
@@ -299,4 +313,42 @@ test('reporting turns use the response review', async (t) => {
   assert.ok(request.input.includes(message));
   assert.match(request.input, /Pure status, setup, or reporting output/);
   assert.ok(!request.input.includes('OLD_CONTENT_SENTINEL'));
+});
+
+test('gate running-job notices prefer the hook session', async (t) => {
+  const f = await fixture(t);
+  const root = join(
+    f.env.CLAUDE_REVIEW_DATA_DIR,
+    'jobs',
+    fingerprint(f.repo).slice(0, 24),
+  );
+  const envJob = await createJob(root, {
+    repo: f.repo,
+    command: 'review',
+    sessionId: 'test-session',
+  });
+  const hookJob = await createJob(root, {
+    repo: f.repo,
+    command: 'review',
+    sessionId: 'hook-session',
+  });
+  const notice = JSON.parse(
+    (
+      await runHook(f, {
+        session_id: 'hook-session',
+      })
+    ).stdout,
+  );
+  assert.ok(notice.systemMessage.includes(hookJob.id));
+  assert.ok(!notice.systemMessage.includes(envJob.id));
+  const fallback = JSON.parse((await runHook(f, { session_id: '' })).stdout);
+  assert.ok(fallback.systemMessage.includes(envJob.id));
+  const empty = JSON.parse(
+    (
+      await runHook(f, {
+        session_id: 'no-jobs-session',
+      })
+    ).stdout,
+  );
+  assert.deepEqual(empty, {});
 });

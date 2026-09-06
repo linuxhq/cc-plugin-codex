@@ -14,7 +14,6 @@ import {
 import { storeRoot } from './lib/store.mjs';
 import { executeJob } from './lib/worker.mjs';
 import { jobSnapshot, statusReport } from './lib/status.mjs';
-import { readGateConfig } from './lib/gate-config.mjs';
 
 function emit(payload, text, json) {
   console.log(json ? JSON.stringify(payload) : text);
@@ -47,29 +46,14 @@ async function main(options) {
     return emit({ job: await jobSnapshot(root, job) }, text, options.json);
   }
   console.error(`Review started: ${job.id}`);
-  await executeJob(root, job.id);
+  const completed = await executeJob(root, job.id);
   await showResult(root, job.id, options.json);
+  if (completed.state !== 'completed') process.exitCode = 1;
 }
 
 async function showSetup(options) {
-  const text = await setup(options);
-  let repo = null;
-  try {
-    repo = await repositoryRoot(process.cwd());
-  } catch {
-    // Setup can check the CLI outside a Git repository.
-  }
-  const gate = repo ? await readGateConfig(storeRoot(repo)) : null;
-  emit(
-    {
-      ready: options['disable-review-gate'] ? null : true,
-      workspaceRoot: repo,
-      gate,
-      message: text,
-    },
-    text,
-    options.json,
-  );
+  const report = await setup(options);
+  emit(report, report.message, options.json);
 }
 
 async function showResult(root, id, json) {
@@ -77,7 +61,6 @@ async function showResult(root, id, json) {
   const output = await result(root, selected.id);
   const job = await jobSnapshot(root, await selectJob(root, selected.id));
   emit({ job, output: output.text, failed: output.failed }, output.text, json);
-  if (output.failed) process.exitCode = 1;
 }
 
 const argv = process.argv.slice(2);

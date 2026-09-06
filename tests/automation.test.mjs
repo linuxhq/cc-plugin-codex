@@ -72,8 +72,9 @@ test('result and cancel respect session scope', async (t) => {
   // A job created earlier but updated later should supply the default result.
   await saveProgress(root, older.id, { updatedAt: '2099-01-01T00:00:00Z' });
   const result = await f.run(['result', '--json']);
-  assert.equal(result.code, 1);
+  assert.equal(result.code, 0);
   assert.equal(JSON.parse(result.stdout).job.id, older.id);
+  assert.equal(JSON.parse(result.stdout).failed, true);
   const cancel = await f.run(['cancel', '--json']);
   assert.equal(cancel.code, 0, cancel.stderr);
   assert.equal(JSON.parse(cancel.stdout).job.id, running.id);

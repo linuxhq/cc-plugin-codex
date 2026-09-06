@@ -36,9 +36,8 @@ export async function jobSnapshot(root, job) {
 export const active = (job) =>
   ['queued', 'running', 'cancelling'].includes(job.state);
 
-export async function sessionJobs(root) {
+export async function sessionJobs(root, sessionId = currentSessionId()) {
   let jobs = await listJobs(root);
-  const sessionId = currentSessionId();
   if (sessionId) jobs = jobs.filter((job) => job.sessionId === sessionId);
   const snapshots = await Promise.all(
     jobs.map((job) => jobSnapshot(root, job)),

@@ -66,7 +66,7 @@ test('prints and persists provider diagnostics', async (t) => {
   assert.equal(run.code, 1);
   const id = extractId(run.stdout);
   const saved = await f.run(['result', id]);
-  assert.equal(saved.code, 1);
+  assert.equal(saved.code, 0);
   for (const output of [run.stdout, saved.stdout]) {
     assert.match(output, /failed/);
     assert.match(output, /Provider request failed/);
@@ -101,7 +101,7 @@ test('cancellation stops a running background Claude process', async (t) => {
     return (await f.run(['status', id])).stdout.includes('cancelled');
   });
   const result = await f.run(['result', id]);
-  assert.equal(result.code, 1);
+  assert.equal(result.code, 0);
   assert.match(result.stdout, /cancelled/);
   assert.doesNotMatch(result.stdout, /Example finding/);
 });
@@ -133,8 +133,8 @@ test('setup checks authentication without a review', async (t) => {
   const missing = await f.run(['setup'], {
     FAKE_CLAUDE_MODE: 'unauthenticated',
   });
-  assert.equal(missing.code, 1);
-  assert.match(missing.stderr, /claude auth login/);
+  assert.equal(missing.code, 0);
+  assert.match(missing.stdout, /claude auth login/);
 });
 
 test('rejects job path traversal', async (t) => {

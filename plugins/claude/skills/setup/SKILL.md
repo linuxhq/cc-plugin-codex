@@ -14,9 +14,10 @@ node "/absolute/plugin/root/scripts/claude-review.mjs" setup
 
 When the user requests a gate change, append `--enable-review-gate` or
 `--disable-review-gate` as requested. Never pass both. With no flag, setup
-checks readiness and reports the current gate setting without changing it.
-Enabling checks authentication first; disabling works even if Claude is
-unavailable. The setting persists per Git checkout outside the repository.
+checks readiness and reports the current gate setting without changing it. Gate
+changes are saved before checking readiness, even if Claude is unavailable or
+unauthenticated. Report both the saved setting and readiness guidance. The
+setting persists per Git checkout outside the repository.
 
 Report the result. Setup does not start a paid review. If the executable is
 missing, point to `https://code.claude.com/docs/en/setup`. If authentication is

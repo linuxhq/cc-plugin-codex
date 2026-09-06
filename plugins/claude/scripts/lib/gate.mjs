@@ -45,7 +45,9 @@ export async function runGate(input) {
     };
   }
   const root = storeRoot(repo);
-  const running = (await sessionJobs(root)).find(active);
+  const running = (await sessionJobs(root, input.session_id || undefined)).find(
+    active,
+  );
   const note = running
     ? `Claude job ${running.id} is still running. ` +
       `Check $claude:status or use $claude:cancel ${running.id}.`
