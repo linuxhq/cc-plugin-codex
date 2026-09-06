@@ -23,6 +23,7 @@ export async function git(cwd, args, options = {}) {
   );
   if (result.code !== 0)
     throw new Error(result.stderr.trim() || 'Git command failed.');
+
   return result.stdout;
 }
 
@@ -44,6 +45,7 @@ export async function collectReview(repo, options = {}) {
         '(diff operation).',
       inputMode: 'self-collect',
     };
+
   const details =
     target.scope === 'branch'
       ? await branchContext(repo, target.base)
@@ -62,13 +64,16 @@ export async function collectReview(repo, options = {}) {
 
 export async function resolveReviewTarget(repo, options) {
   if (options.base) return { scope: 'branch', base: options.base };
+
   if (options.scope === 'working-tree') return { scope: 'working-tree' };
+
   const dirty = await git(repo, [
     'status',
     '--porcelain=v1',
     '--untracked-files=all',
   ]);
   if (options.scope !== 'branch' && dirty) return { scope: 'working-tree' };
+
   return { scope: 'branch', base: await detectDefaultBranch(repo) };
 }
 
@@ -80,6 +85,7 @@ async function detectDefaultBranch(repo) {
   } catch {
     // Repositories without an origin HEAD use the conventional branch names.
   }
+
   for (const name of ['main', 'master', 'trunk']) {
     for (const [prefix, base] of [
       ['refs/heads/', name],
@@ -98,6 +104,7 @@ async function detectDefaultBranch(repo) {
       }
     }
   }
+
   throw new Error(
     'Unable to detect the repository default branch. ' +
       'Pass --base <ref> or use --scope working-tree.',
@@ -127,9 +134,11 @@ async function diffContext(repo, sections, files) {
         },
       });
     }
+
     if (bytes <= inlineBytes)
       return { context: parts.join(''), inputMode: 'inline-diff' };
   }
+
   const stats = [];
   for (const [label, args] of sections) {
     stats.push(
@@ -144,6 +153,7 @@ async function diffContext(repo, sections, files) {
       ]),
     );
   }
+
   return {
     context: [
       ...stats,
@@ -212,16 +222,20 @@ async function workingContext(repo) {
 
 async function untrackedFile(repo, file) {
   if (sensitive.test(file)) return 'Sensitive untracked file omitted.';
+
   const path = join(repo, file);
   const title = `UNTRACKED FILE ${JSON.stringify(file)}\n`;
   try {
     const info = await lstat(path);
     if (info.isSymbolicLink())
       return title + `Symlink target: ${await readlink(path)}`;
+
     if (!info.isFile())
       return title + 'Non-regular file; contents not reviewed.';
+
     if (info.size > 24 * 1024)
       return title + '(skipped: exceeds 24576 byte limit)';
+
     const data = await readFile(path);
     return (
       title +

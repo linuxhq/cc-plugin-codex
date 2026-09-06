@@ -71,6 +71,7 @@ test('auto reviews committed changes with a detected base', async (t) => {
     assert.equal(target.base, 'main');
     assert.match(target.context, /feature change/);
   }
+
   const working = await collectReview(f.repo, { scope: 'working-tree' });
   assert.doesNotMatch(working.context, /feature change/);
   const explicit = await collectReview(f.repo, {

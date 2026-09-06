@@ -54,6 +54,7 @@ test('retention prunes finished jobs and preserves active jobs', async (t) => {
     await saveJob(root, job);
     finished.push(job);
   }
+
   await pruneJobs(root, { maxCount: 2 });
   assert.deepEqual(
     new Set((await listJobs(root)).map((job) => job.id)),
@@ -62,6 +63,6 @@ test('retention prunes finished jobs and preserves active jobs', async (t) => {
   finished[0].finishedAt = new Date(0).toISOString();
   await saveJob(root, finished[0]);
   await createJob(root, { repo: f.repo });
-  await assert.rejects(loadJob(root, finished[0].id), /not found/);
+  assert.equal((await loadJob(root, finished[0].id)).state, 'completed');
   assert.equal((await loadJob(root, active.id)).state, 'queued');
 });

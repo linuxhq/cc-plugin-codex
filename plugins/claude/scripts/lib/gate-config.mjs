@@ -10,9 +10,11 @@ export async function readGateConfig(root) {
         'Invalid review gate configuration. ' +
           'Run $claude:setup --disable-review-gate to reset it.',
       );
+
     return config;
   } catch (error) {
     if (error.code === 'ENOENT') return { enabled: false };
+
     throw error;
   }
 }

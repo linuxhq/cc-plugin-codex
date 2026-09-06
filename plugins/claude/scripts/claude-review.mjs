@@ -22,8 +22,11 @@ function emit(payload, text, json) {
 
 async function main(options) {
   if (options.cwd) process.chdir(options.cwd);
+
   if (options.command === 'help') return console.log(help);
+
   if (options.command === 'setup') return showSetup(options);
+
   const repo = await repositoryRoot(process.cwd());
   const root = storeRoot(repo);
   if (options.command === 'rescue-resume-candidate') {
@@ -36,18 +39,22 @@ async function main(options) {
       options.json,
     );
   }
+
   if (options.command === 'status') {
     const report = await statusReport(root, { ...options, repo });
     return emit(report.payload, report.text, options.json);
   }
+
   if (options.command === 'cancel') {
     const selected = await selectCancelableJob(root, options.id);
     const text = await cancelJob(root, selected.id);
     const job = await jobSnapshot(root, await selectJob(root, selected.id));
     return emit({ job, message: text }, text, options.json);
   }
+
   if (options.command === 'result')
     return showResult(root, options.id, options.json);
+
   const job = await prepareJob(repo, root, options);
   if (options.background) {
     await launchBackground(root, job);
@@ -56,6 +63,7 @@ async function main(options) {
       `Use $claude:status ${job.id} or $claude:result ${job.id}.`;
     return emit({ job: await jobSnapshot(root, job) }, text, options.json);
   }
+
   console.error(`${job.command} started: ${job.id}`);
   const completed = await executeJob(root, job.id, { prompt: job.prompt });
   await showResult(root, job.id, options.json);
@@ -90,5 +98,6 @@ try {
       : error.message;
   if (json) console.log(JSON.stringify({ error: message }));
   else console.error(message);
+
   process.exitCode = 1;
 }

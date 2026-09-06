@@ -9,6 +9,7 @@ async function readInput() {
     if (Buffer.byteLength(input) > 2 * 1024 * 1024)
       throw new Error('Hook input exceeds 2 MiB.');
   }
+
   return JSON.parse(input);
 }
 

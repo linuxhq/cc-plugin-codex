@@ -11,6 +11,7 @@ export function validSessionId(value) {
 
 export async function resumeCandidate(root) {
   if (!currentSessionId()) return { available: false };
+
   const jobs = await sessionJobs(root);
   const job = jobs.find(
     (item) =>
@@ -24,14 +25,17 @@ export async function resumeCandidate(root) {
 }
 
 export async function prepareTask(root, options, repo = process.cwd()) {
-  const input =
+  let input =
     options.command === 'transfer'
       ? await transferContext(options, repo)
       : options['prompt-file']
         ? await readContextFile(options['prompt-file'], repo)
         : options.focus;
-  if (!input?.trim()) throw new Error('Provide a nonempty task or context.');
   const resumeSessionId = await resolveResume(root, options);
+  if (!input?.trim() && resumeSessionId) input = 'Continue the previous task.';
+
+  if (!input?.trim()) throw new Error('Provide a nonempty task or context.');
+
   const prompt = {
     system:
       options.command === 'transfer'
@@ -40,9 +44,7 @@ export async function prepareTask(root, options, repo = process.cwd()) {
           'Acknowledge receipt briefly; do not use tools or perform work.'
         : 'Carry out the user task within its requested scope. ' +
           (options.write
-            ? 'Use the repository write tool to edit files. Shell commands ' +
-              'and tests are unavailable; report validation ' +
-              'the caller must run. ' +
+            ? 'Edit files and run required tests using the built-in tools. ' +
               'Preserve unrelated work. Do not publish, push, deploy, or ' +
               'contact external services unless the task authorizes it. '
             : 'Investigate using read-only repository inspection. ' +
@@ -58,18 +60,19 @@ export async function prepareTask(root, options, repo = process.cwd()) {
 }
 
 async function resolveResume(root, options) {
-  if (!options.resume && !options['resume-job']) return undefined;
-  const reference =
-    options['resume-job'] || (await resumeCandidate(root)).jobId;
+  if (!options.resume && !options['resume-last']) return undefined;
+
+  const reference = (await resumeCandidate(root)).jobId;
+
   if (!reference)
-    throw new Error(
-      'No resumable task in this session. ' +
-        'Use --fresh or --resume-job JOB_ID.',
-    );
+    throw new Error('No resumable task in this session. ' + 'Use --fresh.');
+
   const job = await resolveJob(root, reference);
   if (active({ state: await jobState(root, job) }))
     throw new Error('Wait for the source job to finish before resuming.');
+
   if (job.command !== 'rescue' || !validSessionId(job.claudeSessionId))
     throw new Error('This job has no resumable Claude session.');
+
   return job.claudeSessionId;
 }

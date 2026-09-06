@@ -1,12 +1,7 @@
-import {
-  gateSnapshot,
-  reuseGateSnapshot,
-  saveGateSnapshot,
-} from './gate-snapshot.mjs';
 import { readGateConfig } from './gate-config.mjs';
 import { repositoryRoot } from './git.mjs';
 import { prepareJob } from './jobs.mjs';
-import { runProcess } from './process.mjs';
+import { checkSetup } from './claude.mjs';
 import { active, sessionJobs } from './status.mjs';
 import { storeRoot } from './store.mjs';
 import { executeJob } from './worker.mjs';
@@ -16,6 +11,7 @@ export { gateFailure, parseGateOutput } from './gate-output.mjs';
 
 export async function runGate(input) {
   if (input.hook_event_name !== 'Stop') return {};
+
   let repo;
   try {
     repo = await repositoryRoot(input.cwd || process.cwd());
@@ -26,6 +22,7 @@ export async function runGate(input) {
         'an accessible Git checkout.',
     };
   }
+
   const root = storeRoot(repo);
   const running = (await sessionJobs(root, input.session_id || undefined)).find(
     active,
@@ -42,35 +39,23 @@ export async function runGate(input) {
       `Cannot read review gate configuration: ${error.message}`,
     );
   }
+
   if (!config.enabled) return note ? { systemMessage: note } : {};
-  if (input.stop_hook_active)
-    return {
-      systemMessage:
-        'Claude automatic review skipped after a continued Stop turn.',
-    };
+
   return withNote(await enabledGate(repo, root, input), note);
 }
 
 async function enabledGate(repo, root, input) {
-  const snapshot = await gateSnapshot(repo);
-  if (await reuseGateSnapshot(root, input.session_id, snapshot))
-    return {
-      systemMessage:
-        'Claude automatic review skipped: repository unchanged since the ' +
-        'successful review in this session.',
-    };
-  // Invalidate before a new attempt, including failures and blocked turns.
-  await saveGateSnapshot(root, input.session_id, null);
   try {
-    const available = await runProcess('claude', ['--version']);
-    if (available.code !== 0) throw new Error('Claude is unavailable.');
+    await checkSetup();
   } catch {
     return {
       systemMessage:
         'Claude is not set up for the review gate. Run $claude:setup.',
     };
   }
-  return reviewResponse(repo, root, input, snapshot);
+
+  return reviewResponse(repo, root, input);
 }
 
 function withNote(decision, note) {
@@ -78,10 +63,11 @@ function withNote(decision, note) {
     const field = decision.reason ? 'reason' : 'systemMessage';
     decision[field] = [note, decision[field]].filter(Boolean).join('\n');
   }
+
   return decision;
 }
 
-async function reviewResponse(repo, root, input, snapshot) {
+async function reviewResponse(repo, root, input) {
   const job = await prepareJob(
     repo,
     root,
@@ -98,16 +84,11 @@ async function reviewResponse(repo, root, input, snapshot) {
       `${completed.state}: ${completed.error || 'Review did not complete.'}` +
         `\nReview job: ${job.id}`,
     );
+
   const decision = parseGateOutput(completed.output);
-  if (!decision.reason && !decision.systemMessage) {
-    if (
-      JSON.parse(completed.output).decision === 'ALLOW' &&
-      snapshot &&
-      snapshot === (await gateSnapshot(repo))
-    )
-      await saveGateSnapshot(root, input.session_id, snapshot);
-    return decision;
-  }
+
+  if (!decision.reason && !decision.systemMessage) return decision;
+
   const field = decision.reason ? 'reason' : 'systemMessage';
   decision[field] += `\n\nFull review: $claude:result ${job.id}`;
   return decision;

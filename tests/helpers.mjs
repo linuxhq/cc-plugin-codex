@@ -38,6 +38,7 @@ export async function fixture(t, { commit = true } = {}) {
   const git = async (...args) => {
     const result = await runProcess('git', args, { cwd: repo, env });
     if (result.code) throw new Error(result.stderr);
+
     return result.stdout;
   };
   await git('init', '-b', 'main');
@@ -51,6 +52,7 @@ export async function fixture(t, { commit = true } = {}) {
     await git('add', '.');
     await git('commit', '-m', 'Initial');
   }
+
   const run = (args, overrides = {}) =>
     runProcess(process.execPath, [cli, ...args], {
       cwd: repo,
@@ -65,13 +67,16 @@ export async function eventually(check) {
   while (Date.now() < deadline) {
     const value = await check();
     if (value) return value;
+
     await delay(100);
   }
+
   throw new Error('Timed out waiting for test worker.');
 }
 
 export function extractId(output) {
   const match = /review-[a-f0-9-]{36}/.exec(output);
   if (!match) throw new Error(`No job ID in output: ${output}`);
+
   return match[0];
 }

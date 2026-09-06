@@ -50,6 +50,7 @@ test('untrusted arguments cannot escape the repo', async (t) => {
     { operation: 'bash', command: 'touch ../private' },
   ])
     await assert.rejects(repo.inspectRepository(f.repo, input));
+
   assert.match(
     await repo.inspectRepository(f.repo, {
       operation: 'read',
@@ -108,14 +109,17 @@ test('diff excludes secrets in all layers', async (t) => {
   ];
   const paths = names.flatMap((name) => [name, `nested/${name}`]);
   for (const path of paths) await f.write(path, 'old-secret-sentinel\n');
+
   await f.git('add', '.');
   await f.git('commit', '-m', 'Secrets fixture');
   for (const path of paths) await f.write(path, 'new-secret-sentinel\n');
+
   await f.write('app.js', 'visible-change\n');
   const inspect = (input) =>
     repo.inspectRepository(f.repo, { operation: 'diff', ...input });
   for (const staged of [false, true]) {
     if (staged) await f.git('add', '.');
+
     const diff = await inspect({ staged });
     assert.match(diff, /visible-change/);
     assert.doesNotMatch(diff, /secret-sentinel/);
@@ -124,6 +128,7 @@ test('diff excludes secrets in all layers', async (t) => {
       /secret-sentinel/,
     );
   }
+
   await f.git('commit', '-m', 'Change fixture');
   assert.doesNotMatch(await inspect({ base: 'HEAD~1' }), /secret-sentinel/);
 });
@@ -259,18 +264,19 @@ test('UTF-8 continuations reconstruct long lines exactly', async (t) => {
       .replace(/ \[continued: \d+ bytes remain\]$/, '');
     const cursor = /next byteOffset (\d+)/.exec(page);
     if (!cursor) break;
+
     assert.ok(Number(cursor[1]) > byteOffset);
     byteOffset = Number(cursor[1]);
   }
+
   assert.equal(reconstructed, original);
 });
 
-test('MCP audit records recovery after an invalid tool request', async (t) => {
+test('MCP recovers after an invalid tool request', async (t) => {
   const f = await fixture(t);
   const server = fileURLToPath(
     new URL('../plugins/claude/scripts/repository-server.mjs', import.meta.url),
   );
-  const audit = join(f.root, 'audit.json');
   const requests = [
     { operation: 'read', path: 'missing.js' },
     { operation: 'read', path: 'app.js' },
@@ -285,11 +291,11 @@ test('MCP audit records recovery after an invalid tool request', async (t) => {
       },
     }),
   );
-  await runProcess(process.execPath, [server, f.repo, audit], {
+  const run = await runProcess(process.execPath, [server, f.repo], {
     input: requests.join('\n') + '\n',
   });
-  assert.deepEqual(JSON.parse(await readFile(audit)), {
-    successes: 1,
-    failures: 1,
-  });
+  const replies = run.stdout.trim().split('\n').map(JSON.parse);
+  assert.equal(replies[0].result.isError, true);
+  assert.ok(!replies[1].result.isError);
+  assert.match(replies[1].result.content[0].text, /export const value/);
 });

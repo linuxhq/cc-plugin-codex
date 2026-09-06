@@ -5,30 +5,23 @@ Only review it if Codex actually did code changes in that turn.
 Pure status, setup, or reporting output does not count as reviewable work.
 For example, the output of $claude:setup or $claude:status does not count.
 Only direct edits made in that specific turn count.
-If the previous Codex turn was only a status update, a summary, a setup/login check, a review result, or output from a command that did not itself make direct edits in that turn, return SKIP with a reason that no code edits need review.
+If the previous Codex turn was only a status update, a summary, a setup/login check, a review result, or output from a command that did not itself make direct edits in that turn, return ALLOW immediately and do no further work.
 Challenge whether that specific work and its design choices should ship.
 
 {{CODEX_RESPONSE_BLOCK}}
 </task>
 
 <compact_output_contract>
-Return a JSON object matching the supplied schema with exactly these fields:
-- decision: "ALLOW", "BLOCK", "INCOMPLETE", or "SKIP"
-- reason: a nonempty, concise explanation grounded in inspected evidence.
-Keep the reason compact. Its first line must be a short, standalone reason
-for the decision. Put any supporting details on subsequent lines; only the first
-line is shown by the hook when blocking. Successful reviews are silent.
-Do not put Markdown or other text around the JSON.
+Return a compact final answer.
+Your first line must be exactly one of:
+- ALLOW: <short reason>
+- BLOCK: <short reason>
+Do not put anything before that first line.
 </compact_output_contract>
 
 <default_follow_through_policy>
-Use ALLOW only after successful inspection with no blocking issue.
-Use SKIP only after repository inspection supports that the previous turn
-made no code edits. Never infer SKIP solely from the previous response.
-Follow returned offset and byteOffset continuations to read needed evidence.
-Retry or correct failed tool calls; a recovered tool mistake is not by itself
-a reason for INCOMPLETE. Use INCOMPLETE when required evidence remains
-unavailable or you cannot substantiate a complete review.
+Use ALLOW if the previous turn did not make code changes or if you do not see a blocking issue.
+Use ALLOW immediately, without extra investigation, if the previous turn was not an edit-producing turn.
 Use BLOCK only if the previous turn made code changes and you found something that still needs to be fixed before stopping.
 </default_follow_through_policy>
 

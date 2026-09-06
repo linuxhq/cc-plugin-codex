@@ -12,7 +12,7 @@ import {
 test('task options reject conflicting modes and preserve literal input', () => {
   for (const args of [
     ['rescue', '--fresh', '--resume'],
-    ['rescue', '--fresh', '--resume-job', 'review-ab'],
+    ['rescue', '--fresh', '--resume-last'],
     ['rescue', '--wait', '--background'],
     ['rescue', '--prompt-file', 'task.txt', 'extra'],
     ['rescue', '--resume-job', ''],
@@ -21,11 +21,11 @@ test('task options reject conflicting modes and preserve literal input', () => {
     ['transfer', 'unexpected'],
   ])
     assert.throws(() => parseCommand(args));
+
   const task = 'fix $(touch nope)\nwith `literal` arguments';
   assert.equal(parseCommand(['rescue', '--', task]).focus, task);
-  for (const command of ['review', 'adversarial-review', 'rescue', 'transfer'])
-    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'])
-      assert.equal(parseCommand([command, '--effort', effort]).effort, effort);
+  for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'])
+    assert.equal(parseCommand(['rescue', '--effort', effort]).effort, effort);
 });
 
 test('rescue persistence and explicit write access', async (t) => {
@@ -57,18 +57,18 @@ test('rescue persistence and explicit write access', async (t) => {
   assert.equal(next.code, 0, next.stderr + next.stdout);
   capture = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   assert.equal(option('--resume'), saved.job.claudeSessionId);
-  assert.ok(capture.args.includes('--fork-session'));
-  assert.equal(option('--tools'), '');
-  assert.equal(
-    option('--allowedTools'),
-    'mcp__repository__inspect,mcp__repository__write',
-  );
-  assert.ok(!capture.args.includes('--settings'));
-  assert.equal(option('--permission-mode'), 'dontAsk');
+  assert.ok(!capture.args.includes('--fork-session'));
+  assert.equal(option('--tools'), 'Read,Glob,Grep,Edit,Write,Bash');
+  const settings = JSON.parse(option('--settings'));
+  assert.equal(settings.disableAllHooks, true);
+  assert.equal(settings.sandbox.enabled, true);
+  assert.equal(settings.sandbox.failIfUnavailable, true);
+  assert.equal(settings.sandbox.allowUnsandboxedCommands, false);
+  assert.equal(option('--permission-mode'), 'acceptEdits');
   assert.ok(!capture.args.includes('--dangerously-skip-permissions'));
-  assert.ok(JSON.parse(option('--mcp-config')).mcpServers.repository);
+  assert.deepEqual(JSON.parse(option('--mcp-config')), { mcpServers: {} });
   const nextJob = JSON.parse(next.stdout).job;
-  assert.notEqual(nextJob.claudeSessionId, saved.job.claudeSessionId);
+  assert.equal(nextJob.claudeSessionId, saved.job.claudeSessionId);
   const third = await f.run(['rescue', '--resume', '--json', 'inspect fix']);
   assert.equal(third.code, 0, third.stderr);
   capture = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
@@ -85,14 +85,6 @@ test('rescue persistence and explicit write access', async (t) => {
       })
     ).code,
     1,
-  );
-  assert.equal(
-    (
-      await f.run(['rescue', '--resume-job', saved.job.id, 'continue'], {
-        CODEX_THREAD_ID: 'another-session',
-      })
-    ).code,
-    0,
   );
   assert.equal((await f.git('status', '--porcelain')).trim(), '');
 });
@@ -190,7 +182,7 @@ test('transfer saves context with tools disabled', async (t) => {
   assert.equal((await f.git('status', '--porcelain')).trim(), '');
 });
 
-test('transfer discovers transcripts and accepts summaries', async (t) => {
+test('transfer discovers transcripts', async (t) => {
   const f = await fixture(t);
   const session = '12345678-1234-1234-1234-123456789abc';
   const home = join(f.root, 'codex');
@@ -202,11 +194,6 @@ test('transfer discovers transcripts and accepts summaries', async (t) => {
     CODEX_THREAD_ID: session,
   });
   assert.equal(run.code, 0, run.stderr + run.stdout);
-  const summary = join(f.root, 'summary.txt');
-  await writeFile(summary, 'Goal and next steps');
-  assert.equal((await f.run(['transfer', '--prompt-file', summary])).code, 0);
-  const capture = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
-  assert.equal(capture.input, 'Goal and next steps');
 });
 
 test('context rejects malformed, oversized, and symlink inputs', async (t) => {
@@ -245,17 +232,14 @@ test('missing session IDs preserve results and discard prompts', async (t) => {
   );
   assert.doesNotMatch(saved, /private-task-sentinel/);
   assert.equal(JSON.parse(saved).prompt, undefined);
-  const recovery = JSON.parse(await readFile(report.job.recovery));
-  assert.equal(recovery.before, '');
-  assert.equal(recovery.after, '');
 });
 
 test('transferred context cannot become a rescue continuation', async (t) => {
   const f = await fixture(t);
-  const source = join(f.root, 'summary.txt');
-  await writeFile(source, 'untrusted history');
+  const source = join(f.root, 'session.jsonl');
+  await writeFile(source, transcript());
   const transfer = JSON.parse(
-    (await f.run(['transfer', '--prompt-file', source, '--json'])).stdout,
+    (await f.run(['transfer', '--source', source, '--json'])).stdout,
   );
   assert.deepEqual(
     JSON.parse((await f.run(['rescue-resume-candidate', '--json'])).stdout),
@@ -280,75 +264,6 @@ test('sensitive context filenames are refused', async (t) => {
   const path = join(f.root, '.env');
   await writeFile(path, 'TOKEN=secret');
   await assert.rejects(readContextFile(path), /Sensitive/);
-});
-
-test('write jobs serialize and cancellation releases locks', async (t) => {
-  const f = await fixture(t);
-  const launch = await f.run(
-    ['rescue', '--write', '--background', 'slow task'],
-    { FAKE_CLAUDE_MODE: 'slow' },
-  );
-  const id = extractId(launch.stdout);
-  f.cleanup(async () => {
-    await f.run(['cancel', id]);
-  });
-  await eventually(async () => {
-    try {
-      return JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).pid;
-    } catch {
-      return false;
-    }
-  });
-  const second = await f.run(['rescue', '--write', 'second']);
-  assert.equal(second.code, 1);
-  assert.match(second.stdout, /Another write job/);
-  await f.run(['cancel', id]);
-  await eventually(
-    async () =>
-      JSON.parse((await f.run(['status', id, '--json'])).stdout).job.state ===
-      'cancelled',
-  );
-  assert.match((await f.run(['result', id])).stdout, /partial edits/);
-  assert.equal((await f.run(['rescue', '--write', 'third'])).code, 0);
-});
-
-test('worker death kills writers and retains the lock', async (t) => {
-  const f = await fixture(t);
-  const launch = await f.run(['rescue', '--write', '--background', 'slow'], {
-    FAKE_CLAUDE_MODE: 'slow',
-  });
-  const id = extractId(launch.stdout);
-  const pid = await eventually(async () => {
-    try {
-      return JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).pid;
-    } catch {
-      return false;
-    }
-  });
-  f.cleanup(async () => {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      /* Already stopped. */
-    }
-  });
-  const lockPath = join(f.repo, '.git', 'claude-rescue.lock');
-  const lock = JSON.parse(await readFile(lockPath));
-  assert.equal(lock.jobId, id);
-  process.kill(lock.pid, 'SIGKILL');
-  await eventually(async () => {
-    try {
-      process.kill(pid, 0);
-      return false;
-    } catch (error) {
-      return error.code === 'ESRCH';
-    }
-  });
-  assert.equal(JSON.parse(await readFile(lockPath)).jobId, id);
-  assert.match(
-    (await f.run(['rescue', '--write', 'next'])).stdout,
-    /Another write job/,
-  );
 });
 
 test('large background prompts arrive and are cleaned up', async (t) => {
@@ -379,4 +294,74 @@ test('large background prompts arrive and are cleaned up', async (t) => {
     'prompt.json',
   );
   await assert.rejects(readFile(payload), { code: 'ENOENT' });
+});
+
+test('upstream resume-last continues without new task text', async (t) => {
+  const f = await fixture(t);
+  const first = JSON.parse(
+    (await f.run(['rescue', '--json', 'inspect'])).stdout,
+  );
+  const resumed = await f.run(['rescue', '--resume-last', '--json']);
+  assert.equal(resumed.code, 0, resumed.stderr + resumed.stdout);
+  assert.equal(
+    JSON.parse(resumed.stdout).job.claudeSessionId,
+    first.job.claudeSessionId,
+  );
+});
+
+test('removed extension flags are rejected', () => {
+  for (const args of [
+    ['rescue', '--resume-job', 'review-ab', 'continue'],
+    ['transfer', '--prompt-file', 'summary.txt'],
+    ['transfer', '--background'],
+    ['transfer', '--model', 'sonnet'],
+    ['transfer', '--effort', 'high'],
+  ])
+    assert.throws(() => parseCommand(args));
+});
+
+test('slow worker startup has no deadline', async (t) => {
+  const f = await fixture(t);
+  const { cp } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+  const { runProcess } =
+    await import('../plugins/claude/scripts/lib/process.mjs');
+  const plugin = fileURLToPath(new URL('../plugins/claude', import.meta.url));
+  const installed = join(f.root, 'slow plugin');
+  await cp(plugin, installed, { recursive: true });
+  const worker = join(installed, 'scripts/worker.mjs');
+  await writeFile(
+    worker,
+    'await new Promise((resolve) => setTimeout(resolve, 11_000));\n' +
+      (await readFile(worker, 'utf8')),
+  );
+  const launch = await runProcess(
+    process.execPath,
+    [
+      join(installed, 'scripts/claude-review.mjs'),
+      'rescue',
+      '--background',
+      '--json',
+      'slow-start sentinel',
+    ],
+    { cwd: f.repo, env: f.env },
+  );
+  assert.equal(launch.code, 0, launch.stderr);
+  const id = JSON.parse(launch.stdout).job.id;
+  const done = await f.run([
+    'status',
+    id,
+    '--wait',
+    '--timeout-ms',
+    '20000',
+    '--poll-interval-ms',
+    '100',
+    '--json',
+  ]);
+  assert.equal(JSON.parse(done.stdout).job.state, 'completed');
+  assert.equal(
+    JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).input,
+    'slow-start sentinel',
+  );
+  assert.equal((await f.git('status', '--porcelain')).trim(), '');
 });

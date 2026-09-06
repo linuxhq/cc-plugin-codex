@@ -116,6 +116,7 @@ test('status orders and limits history by last activity', async (t) => {
     });
     jobs.push(job);
   }
+
   const report = JSON.parse((await f.run(['status', '--json'])).stdout);
   assert.deepEqual(
     report.running.map((job) => job.id),
@@ -145,6 +146,7 @@ test('JSON handles setup, empty reviews, and errors', async (t) => {
     assert.equal(run.code, 1);
     assert.equal(typeof JSON.parse(run.stdout).error, 'string');
   }
+
   await f.write('app.js', 'changed\n');
   const failed = await f.run(['review', '--json'], {
     FAKE_CLAUDE_MODE: 'json-error',
@@ -211,6 +213,7 @@ test('status all expands history and escapes table cells', async (t) => {
     });
     await saveJob(rootFor(f), { ...job, state: 'completed' });
   }
+
   const other = await createJob(rootFor(f), {
     repo: f.repo,
     command: 'review',

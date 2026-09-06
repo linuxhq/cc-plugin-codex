@@ -29,6 +29,7 @@ test('fragmented events preserve the result and exclude thinking', () => {
   const wire = events.map((event) => JSON.stringify(event)).join('\r\n');
   for (let offset = 0; offset < wire.length; offset += 7)
     stream.write(wire.slice(offset, offset + 7));
+
   assert.equal(parseResult(stream.finish()), 'Final review é');
   assert.ok(updates.some((update) => update.phase === 'reading'));
   assert.ok(updates.some((update) => update.phase === 'writing'));

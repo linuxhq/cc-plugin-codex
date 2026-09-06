@@ -48,17 +48,21 @@ const inside = (root, path) => {
 function validateInput(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw new Error('Invalid arguments.');
+
   for (const key of Object.keys(input)) {
     if (!Object.hasOwn(inspectionTool.inputSchema.properties, key))
       throw new Error('Unknown argument.');
   }
+
   validatePage(input);
   if (input.path !== undefined) validatePath(input.path);
+
   if (
     input.base !== undefined &&
     (typeof input.base !== 'string' || input.base.includes('\0'))
   )
     throw new Error('Invalid base.');
+
   if (input.staged !== undefined && typeof input.staged !== 'boolean')
     throw new Error('Invalid staged flag.');
 }
@@ -81,6 +85,7 @@ export async function inspectRepository(repo, input, options = {}) {
   repo = await realpath(repo);
   const page = inspectionPage(input, options);
   if (input.operation === 'files') return listFiles(repo, input, options);
+
   if (input.operation === 'read')
     await readRepositoryFile(repo, input.path, page);
   else if (input.operation === 'diff') await diff(repo, input, page);
@@ -93,6 +98,7 @@ export async function inspectRepository(repo, input, options = {}) {
       page,
     );
   else throw new Error('Unknown inspection operation.');
+
   return page.finish();
 }
 
@@ -138,6 +144,7 @@ async function listFiles(repo, input, options) {
 async function reviewableFile(repo, file) {
   validatePath(file);
   if (sensitive.test(file)) throw new Error('Sensitive file; not reviewed.');
+
   // Query only the literal path, never materialize the repository file list.
   const match = await git(repo, [
     'ls-files',
@@ -157,6 +164,7 @@ async function readRepositoryFile(repo, file, page) {
   const path = await realpath(resolve(repo, file));
   if (!inside(repo, path) || sensitive.test(relative(repo, path)))
     throw new Error('File escapes repository or is sensitive.');
+
   const handle = await open(
     path,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -164,12 +172,14 @@ async function readRepositoryFile(repo, file, page) {
   try {
     const info = await handle.stat();
     if (!info.isFile()) throw new Error('Not a regular file.');
+
     const stream = handle.createReadStream({
       encoding: 'utf8',
       autoClose: false,
     });
     for await (const chunk of stream) {
       if (chunk.includes('\0')) throw new Error('Binary file; not reviewed.');
+
       page.write(chunk);
     }
   } finally {
@@ -196,8 +206,10 @@ async function diff(repo, input, page) {
     ).trim();
     if (!/^[a-f0-9]{40,64}$/.test(revision))
       throw new Error('Invalid resolved revision.');
+
     args.push(`${revision}...HEAD`);
   } else if (input.staged) args.push('--cached');
+
   return streamGit(
     repo,
     [

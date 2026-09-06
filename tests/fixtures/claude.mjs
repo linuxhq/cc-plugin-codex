@@ -30,27 +30,18 @@ if (args[0] === '--version') {
 } else {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
+
   await writeFile(
     process.env.FAKE_CLAUDE_CAPTURE,
     JSON.stringify({ args, input, cwd: process.cwd(), pid: process.pid }),
   );
-  const mcp = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
-  const audit = mcp.mcpServers.repository?.args[2];
-  if (audit && mode !== 'no-inspection')
-    await writeFile(
-      audit,
-      JSON.stringify({
-        successes: mode === 'inspection-failed' ? 0 : 1,
-        failures: ['inspection-failed', 'inspection-recovered'].includes(mode)
-          ? 1
-          : 0,
-      }),
-    );
   if (args.includes('stream-json')) {
     console.log(JSON.stringify({ type: 'system', subtype: 'init' }));
     console.log(JSON.stringify({ type: 'tool_progress', tool_name: 'Read' }));
   }
+
   if (mode === 'slow') await delay(60_000);
+
   if (mode === 'fail') {
     console.error('Provider unavailable');
     process.exitCode = 2;
@@ -76,7 +67,9 @@ if (args[0] === '--version') {
             ? undefined
             : args.includes('--session-id')
               ? args[args.indexOf('--session-id') + 1]
-              : randomUUID(),
+              : args.includes('--resume')
+                ? args[args.indexOf('--resume') + 1]
+                : randomUUID(),
         duration_ms: 123,
         total_cost_usd: 0.01,
         usage: { input_tokens: 10, output_tokens: 5 },

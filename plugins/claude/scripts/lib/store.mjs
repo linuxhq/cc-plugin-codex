@@ -23,6 +23,7 @@ export function storeRoot(repo) {
 
 export function jobPath(root, id, name = 'job.json') {
   if (!/^review-[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid job ID.');
+
   return join(root, id, name);
 }
 
@@ -59,6 +60,7 @@ export async function loadJob(root, id) {
       throw new Error(`Job not found in this repository: ${id}`, {
         cause: error,
       });
+
     throw error;
   }
 }
@@ -69,8 +71,10 @@ export async function listJobs(root) {
     entries = await readdir(root);
   } catch (error) {
     if (error.code === 'ENOENT') return [];
+
     throw error;
   }
+
   const jobs = await Promise.all(
     entries
       .filter((id) => /^review-[a-f0-9-]{36}$/.test(id))
@@ -80,6 +84,7 @@ export async function listJobs(root) {
         } catch (error) {
           // A concurrent creator may have pruned this finished job.
           if (error.cause?.code === 'ENOENT') return null;
+
           throw error;
         }
       }),
@@ -92,17 +97,23 @@ export async function listJobs(root) {
 export async function resolveJob(root, reference) {
   if (reference && !/^review-[a-f0-9-]+$/.test(reference))
     throw new Error('Invalid job ID.');
+
   const jobs = await listJobs(root);
   if (!reference) {
     if (!jobs.length) throw new Error('No review jobs in this repository.');
+
     return jobs[0];
   }
+
   const exact = jobs.find((job) => job.id === reference);
   if (exact) return exact;
+
   const matches = jobs.filter((job) => job.id.startsWith(reference));
   if (matches.length === 1) return matches[0];
+
   if (matches.length > 1)
     throw new Error('Job reference is ambiguous. Use a longer job ID.');
+
   throw new Error(`Job not found in this repository: ${reference}`);
 }
 
@@ -112,33 +123,32 @@ export async function exists(path) {
     return true;
   } catch (error) {
     if (error.code === 'ENOENT') return false;
+
     throw error;
   }
 }
 
 export async function jobState(root, job) {
   if (terminalStates.includes(job.state)) return job.state;
+
   const heartbeat = jobPath(root, job.id, 'heartbeat');
   const lastSeen = (await exists(heartbeat))
     ? (await stat(heartbeat)).mtimeMs
     : Date.parse(job.createdAt);
   if (Date.now() - lastSeen > 30_000) return 'interrupted';
+
   if (await exists(jobPath(root, job.id, 'cancel'))) return 'cancelling';
+
   return job.state;
 }
 
 // Keep active jobs regardless of age. Run before each new job is created.
-export async function pruneJobs(
-  root,
-  { maxCount = 100, maxAgeDays = 30 } = {},
-) {
-  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+export async function pruneJobs(root, { maxCount = 50 } = {}) {
   const finished = (await listJobs(root)).filter((job) =>
     terminalStates.includes(job.state),
   );
   for (const [index, job] of finished.entries()) {
-    const ended = Date.parse(job.finishedAt || job.createdAt);
-    if (index >= maxCount || ended < cutoff)
+    if (index >= maxCount)
       await rm(join(root, job.id), { recursive: true, force: true });
   }
 }

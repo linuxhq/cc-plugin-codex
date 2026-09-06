@@ -10,6 +10,14 @@ export default [
     rules: {
       eqeqeq: 'error',
       'no-var': 'error',
+      'padding-line-between-statements': [
+        'error',
+        {
+          blankLine: 'always',
+          prev: ['if', 'for', 'while', 'do', 'switch', 'try', 'with'],
+          next: '*',
+        },
+      ],
       'prefer-const': 'error',
       'max-len': ['error', { code: 80, tabWidth: 2 }],
       'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],

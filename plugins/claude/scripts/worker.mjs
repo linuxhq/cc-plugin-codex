@@ -13,12 +13,7 @@ try {
   } finally {
     await rm(path, { force: true });
   }
-  if (process.send)
-    await new Promise((resolve, reject) => {
-      process.send({ ready: true }, (error) =>
-        error ? reject(error) : resolve(),
-      );
-    });
+
   const job = await executeJob(root, id, { prompt });
   process.exitCode = job.state === 'completed' ? 0 : 1;
 } catch (error) {
@@ -32,9 +27,9 @@ try {
       finishedAt: new Date().toISOString(),
     });
   } catch {
-    /* The launcher also records startup failures. */
+    /* The job store is unavailable; worker.log retains the failure. */
   }
-  if (process.connected) process.send({ error: message });
+
   console.error(message);
   process.exitCode = 1;
 }

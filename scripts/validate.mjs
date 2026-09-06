@@ -16,6 +16,7 @@ assert.equal(version, pkg.version);
 assert.equal(extra.length, 0);
 if (cachebuster !== undefined)
   assert.match(cachebuster, /^codex\.[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*$/);
+
 assert.equal(manifest.skills, './skills/');
 assert.equal(marketplace.plugins[0].name, manifest.name);
 assert.equal(marketplace.plugins[0].source.path, './plugins/claude');
@@ -44,6 +45,20 @@ for (const name of names) {
   assert.ok(metadata.description.length > 20);
   assert.ok(!text.includes('[TODO:'));
 }
+
+for (const name of ['lint', 'format', 'test']) {
+  const text = await readFile(
+    new URL(`.agents/skills/${name}/SKILL.md`, root),
+    'utf8',
+  );
+  const header = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  assert.ok(header, `${name} has YAML frontmatter`);
+  const metadata = parse(header[1]);
+  assert.equal(metadata.name, name);
+  assert.ok(metadata.description.length > 20);
+  assert.ok(!text.includes('[TODO:'));
+}
+
 for (const path of [
   'scripts/claude-review.mjs',
   'scripts/worker.mjs',
@@ -58,6 +73,7 @@ for (const path of [
 ]) {
   await access(new URL(join('plugins/claude', path), root));
 }
+
 const hooks = await json('plugins/claude/hooks/hooks.json');
 const stop = hooks.hooks.Stop[0].hooks[0];
 assert.equal(stop.type, 'command');

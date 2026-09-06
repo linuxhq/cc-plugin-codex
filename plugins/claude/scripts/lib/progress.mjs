@@ -28,10 +28,12 @@ export async function saveProgress(root, id, progress) {
 
 export async function readProgress(root, job) {
   if (job.progress) return job.progress;
+
   try {
     return JSON.parse(await readFile(jobPath(root, job.id, 'progress.json')));
   } catch (error) {
     if (error.code === 'ENOENT') return {};
+
     throw error;
   }
 }
@@ -49,8 +51,11 @@ export function formatProgress(job, state, progress, detailed) {
     `  ${elapsedLabel}: ${seconds}s  Phase: ${phase}`,
   ];
   if (progress.summary) lines.push(`  Summary: ${progress.summary}`);
+
   if (progress.updatedAt) lines.push(`  Last update: ${progress.updatedAt}`);
+
   if (detailed && progress.preview?.length)
     lines.push('  Progress:', ...progress.preview.map((line) => `    ${line}`));
+
   return lines.join('\n');
 }

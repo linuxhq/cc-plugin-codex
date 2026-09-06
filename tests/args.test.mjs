@@ -55,3 +55,12 @@ test('setup accepts either review gate toggle', () => {
     assert.equal(parseCommand(['setup', `--${flag}`])[flag], true);
   }
 });
+
+test('upstream setup and review commands reject extra feature flags', () => {
+  assert.throws(() => parseCommand(['setup', '--install']));
+  for (const command of ['review', 'adversarial-review']) {
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      assert.throws(() => parseCommand([command, '--effort', effort]));
+    }
+  }
+});

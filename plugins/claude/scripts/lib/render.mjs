@@ -35,10 +35,12 @@ export function renderReviewResult(data, target) {
         lines.push(`  Recommendation: ${finding.recommendation.trim()}`);
     }
   }
+
   const steps = data.next_steps.map((step) => step.trim()).filter(Boolean);
   if (steps.length) {
     lines.push('', 'Next steps:');
     for (const step of steps) lines.push(`- ${step}`);
   }
+
   return `${lines.join('\n').trimEnd()}\n`;
 }

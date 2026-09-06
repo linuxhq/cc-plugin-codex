@@ -18,6 +18,7 @@ export function runProcess(command, args, options = {}) {
     let killTimer;
     const stop = (error) => {
       if (failure) return;
+
       failure = error;
       terminate(child, 'SIGTERM');
       killTimer = setTimeout(() => terminate(child, 'SIGKILL'), 1000);
@@ -25,14 +26,17 @@ export function runProcess(command, args, options = {}) {
     const receive = (stream) => (chunk) => {
       if (stream !== 'stdout' || options.captureStdout !== false)
         size += Buffer.byteLength(chunk);
+
       if (size > maxBytes)
         return stop(new Error('Subprocess output exceeds limit.'));
+
       if (stream === 'stdout') {
         try {
           options.onStdout?.(chunk);
         } catch (error) {
           return stop(error);
         }
+
         if (options.captureStdout !== false) stdout += chunk;
       } else stderr += chunk;
     };
@@ -48,6 +52,7 @@ export function runProcess(command, args, options = {}) {
         : setTimeout(() => stop(new Error('Subprocess timed out.')), timeout);
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) abort();
+
     const finish = (error, code) => {
       clearTimeout(timer);
       clearTimeout(killTimer);
@@ -63,6 +68,7 @@ export function runProcess(command, args, options = {}) {
 
 function terminate(child, signal) {
   if (!child.pid) return;
+
   try {
     if (process.platform === 'win32') child.kill(signal);
     else process.kill(-child.pid, signal);

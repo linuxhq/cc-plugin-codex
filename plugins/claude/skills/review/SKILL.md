@@ -8,9 +8,9 @@ Run a Claude review through the shared Claude reviewer.
 Arguments:
 `[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]`
 
-Use the arguments supplied with this skill invocation. Both `--model MODEL` and
-`--effort low|medium|high|xhigh|max` are supported; preserve explicit selections
-and otherwise leave Claude defaults unset.
+Use the arguments supplied with this skill invocation. `--model MODEL` is
+supported; preserve an explicit selection and otherwise leave Claude defaults
+unset.
 
 Core constraint:
 

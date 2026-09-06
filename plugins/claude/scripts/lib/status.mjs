@@ -20,7 +20,7 @@ export async function jobSnapshot(root, job) {
       ? {
           warning:
             'Write job may have left partial edits. Inspect the working tree ' +
-            'and recovery record before continuing.',
+            'before continuing.',
         }
       : {}),
     state,
@@ -46,6 +46,7 @@ export const active = (job) =>
 export async function sessionJobs(root, sessionId = currentSessionId()) {
   let jobs = await listJobs(root);
   if (sessionId) jobs = jobs.filter((job) => job.sessionId === sessionId);
+
   const snapshots = await Promise.all(
     jobs.map((job) => jobSnapshot(root, job)),
   );
@@ -54,6 +55,7 @@ export async function sessionJobs(root, sessionId = currentSessionId()) {
 
 export async function statusReport(root, options = {}) {
   if (options.id) return singleStatus(root, options);
+
   const sessionId = currentSessionId();
   const snapshots = await sessionJobs(root);
   const running = snapshots.filter(active);
@@ -87,6 +89,7 @@ async function singleStatus(root, options) {
     await sleep(Math.min(pollMs, 60_000, Math.max(0, deadline - Date.now())));
     job = await jobSnapshot(root, await loadJob(root, job.id));
   }
+
   const waitTimedOut = Boolean(options.wait && active(job));
   const text = formatProgress(job, job.state, job.progress, true);
   const continuation = job.claudeSessionId
@@ -127,7 +130,9 @@ function renderTable(jobs, gate) {
     ];
     lines.push(`| ${values.map(cell).join(' | ')} |`);
   }
+
   if (!jobs.length)
     lines.push('| No review jobs in this session. | | | | | | | |');
+
   return lines.join('\n');
 }
