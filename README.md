@@ -1,208 +1,204 @@
 # Claude Review for Codex
 
-Ask Claude Code to review your changes from inside Codex. Normal and adversarial
-reviews share a small runtime with background jobs, stored results, and
-cancellation. An optional automatic review gate asks Claude to check a turn
-before Codex finishes. Every command starts with `$claude:`.
+Get a second opinion from Claude without leaving Codex. Review your code for
+bugs, challenge a design decision, or have Claude automatically check each turn
+before Codex finishes.
 
-## Requirements
+Reviews use your local Claude account and count toward its usage limits. The
+reviewer can read code, but cannot edit files or run tests.
 
-- Node.js 22.13 or later and Git, on macOS or Linux.
+## Get started
+
+You'll need:
+
+- macOS or Linux, Git, and Node.js 22.13 or later.
 - Codex with plugin support.
-- [Claude Code][claude-setup] installed as `claude` and authenticated with
-  `claude auth login`.
+- [Claude Code][claude-setup] installed and signed in with `claude auth login`.
 
-The plugin uses the local Claude CLI and its credentials. Reviews consume that
-account's usage. No runtime npm dependencies or build step are required.
-
-## Install
-
-Add the GitHub marketplace and install the plugin:
+Install the plugin:
 
 ```sh
 codex plugin marketplace add linuxhq/cc-plugin-codex
 codex plugin add claude@linuxhq
 ```
 
-Start a new Codex session, then run `$claude:setup`.
+Start a new Codex session, then check that everything is ready:
 
-## Install from this checkout
-
-Run these commands from the repository root:
-
-```sh
-codex plugin marketplace add .
-codex plugin add claude@linuxhq
+```text
+$claude:setup
 ```
 
-Start a new Codex session, then run `$claude:setup`. The plugin name is
-`claude`; commands use `$claude:<skill-name>` as listed below.
+Run your first review:
 
-## Commands
+```text
+$claude:review --wait
+```
 
-| Command                      | Purpose                        |
-| ---------------------------- | ------------------------------ |
-| `$claude:review`             | Find bugs in Git changes       |
-| `$claude:adversarial-review` | Challenge design choices       |
-| `$claude:setup`              | Check readiness and gate state |
-| `$claude:status [JOB_ID]`    | Show progress and recent jobs  |
-| `$claude:result [JOB_ID]`    | Retrieve stored findings       |
-| `$claude:cancel [JOB_ID]`    | Request cancellation           |
+After updating the plugin, start a new session to load the changes.
+
+## Choose a review
+
+**Code review** looks for bugs and regressions in your changes:
 
 ```text
 $claude:review
 $claude:review --base main
-$claude:review --background --model sonnet
+```
+
+**Adversarial review** challenges the approach, assumptions, and design choices.
+You can give it a specific area to focus on:
+
+```text
+$claude:adversarial-review
 $claude:adversarial-review --base main examine retry and rollback behavior
+```
+
+Both commands return Claude's review without rewriting it or applying fixes.
+They run when you explicitly request them.
+
+### Wait or keep working
+
+Use `--wait` to wait for the review, or `--background` to get a job ID and
+return immediately. If you omit both flags, Codex asks which you prefer,
+recommending background execution for larger changes.
+
+```text
+$claude:review --background
 $claude:status
 $claude:result
 ```
 
-### Review arguments
-
-Both skills are explicitly invoked and review-only: they return the command's
-stdout verbatim and do not apply fixes. Normal review checks implementation
-defects. Adversarial review challenges the approach, design choices, tradeoffs,
-and assumptions; it is not just a stricter correctness pass.
-
-Pass `--wait` or `--background` to choose execution mode directly. Without
-either flag, the skill estimates the change size and asks once. It recommends
-waiting for clearly tiny changes (roughly one or two files), and background
-execution for larger or uncertain scopes. Background execution returns without
-polling; use `$claude:status` and `$claude:result` to follow the job.
-
-Both review commands accept:
-
-- `--wait`: wait for the result.
-- `--background`: return immediately with a job ID. Cannot be combined with
-  `--wait`.
-- `--base REF`: review the branch from its merge base with this ref to HEAD.
-- `--scope auto|working-tree|branch`: default to `auto`, which selects branch
-  review when the checkout is clean and working-tree review when local changes
-  exist. Branch scope detects the default base if none is given. `--base` takes
-  precedence over scope; explicit `working-tree` without a base reviews only
-  local changes. Base detection checks origin HEAD, then main, master, and
-  trunk.
-- `--model MODEL`: override Claude's configured model.
-- `--effort low|medium|high|xhigh|max`: override Claude's configured effort.
-  Supported model and effort combinations depend on the installed CLI and
-  provider.
-
-Only `$claude:adversarial-review` accepts custom focus text, either as
-positional arguments or through `--focus-file PATH`.
-
-Adversarial reviews pass the upstream structured output schema through Claude's
-`--json-schema` flag. The runtime requires the `structured_output` result field,
-validates it, and renders findings in upstream's Markdown layout. Missing
-output, schema retry failures, and invalid data are reported as failed reviews.
-
-### Review scope and jobs
-
-- Working-tree reviews include staged and unstaged patches plus nonignored
-  untracked files, even before the first commit. Ignored files are excluded.
-- Binary changes are identified, but their contents are not reviewed.
-- Context up to 256 KiB is included in the prompt. Larger diffs are streamed to
-  a complete private snapshot that Claude can read in sections with Read and
-  Grep. This applies to working-tree, branch, and automatic turn reviews.
-- Without a job ID, `result` and `cancel` select the latest job in this checkout
-  across Codex sessions. `status` lists the ten latest jobs. Use an explicit ID
-  when multiple sessions are active.
-- Separate Git worktrees have separate job stores.
-- Background reviews snapshot the patch at launch, but supporting file reads use
-  the live checkout. Avoid changing the checkout during a review when consistent
-  surrounding context matters.
-
-`$claude:status` shows elapsed time (or final duration), the current phase, a
-short activity summary, and the last progress update. Pass a job ID to see the
-five most recent activity previews. Progress comes from Claude's streamed tool
-and text events; it does not indicate that a review passed. A heartbeat confirms
-worker liveness separately from progress updates.
-
-## Automatic review gate
-
-Like OpenAI's Codex plugin for Claude Code, this plugin bundles a `Stop` hook
-with an opt-in setting for each Git checkout:
+Status shows elapsed time, the review phase, and recent activity. Add a job ID
+for more detail, retrieve a particular review, or cancel it:
 
 ```text
-$claude:setup --enable-review-gate
+$claude:status JOB_ID
+$claude:result JOB_ID
+$claude:cancel JOB_ID
+```
+
+Without an ID, `status` lists the ten latest jobs; `result` and `cancel` use the
+latest job in this checkout, across sessions. Background jobs keep running after
+a Codex session ends. Check status or results for completion; there are no
+background completion notifications.
+
+### What gets reviewed?
+
+By default, Claude reviews your local changes when there are any: staged edits,
+unstaged edits, and new files that Git isn't ignoring. If the checkout is clean,
+it reviews your committed branch changes against the detected default branch.
+
+To choose the target yourself:
+
+- `--base main`: review changes since the branch diverged from `main`.
+- `--scope working-tree`: review only local changes.
+- `--scope branch`: review committed branch changes, detecting the base if
+  needed.
+
+`--base` takes precedence over `--scope`. Base detection checks origin HEAD,
+then `main`, `master`, and `trunk`.
+
+Reviews preserve the patch as it looked at launch. Claude can also read
+surrounding files from the live checkout, so later edits may affect that
+context. Large diffs are saved as complete private snapshots for Claude to read
+in sections. Binary changes are noted, but their contents aren't reviewed.
+
+### Other options
+
+- `--model MODEL`: choose a model instead of Claude's configured default.
+- `--effort low|medium|high|xhigh|max`: choose the reasoning effort. Supported
+  combinations depend on your Claude CLI and provider.
+- `--focus-file PATH`: supply focus text from a file. Adversarial review only.
+
+```text
+$claude:review --background --model sonnet
+$claude:adversarial-review --wait --focus-file review-focus.md
+```
+
+## Review automatically
+
+The optional review gate asks Claude to check changes made during each Codex
+turn before Codex finishes. It's off by default.
+
+To enable it:
+
+1. Use a Codex version that supports [UserPromptSubmit and Stop
+   hooks][codex-hooks].
+2. Start a new session after installing or updating the plugin.
+3. Open `/hooks` and review and trust both hooks.
+4. Run `$claude:setup --enable-review-gate` in your checkout.
+
+The setting stays enabled across sessions for that checkout. Each Git worktree
+has its own setting. Enabling it doesn't grant hook trust or override a Codex
+setting that disables hooks.
+
+To check the setting or turn it off:
+
+```text
+$claude:setup
 $claude:setup --disable-review-gate
 ```
 
-The gate is disabled by default. Setup without flags reports its state and
-checks Claude authentication. Enabling checks authentication before saving the
-setting; disabling works even when Claude is unavailable.
+Disabling works even if Claude is unavailable.
 
-To activate the gate:
+### What happens each turn?
 
-1. Use a Codex version with [UserPromptSubmit and Stop hooks][codex-hooks].
-2. Start a new session after installing or updating the plugin.
-3. Review and trust both hooks in `/hooks`.
-4. Run `$claude:setup --enable-review-gate` in the checkout.
+- The gate reviews changes made during the turn, including changes you
+  committed. It doesn't send conversation text to Claude.
+- If nothing changed, it skips the review. Older uncommitted edits, or simply
+  staging or committing those edits, don't trigger a review.
+- `ALLOW` lets Codex finish. `BLOCK` sends Codex a short summary of issues that
+  still need fixes. Use `$claude:result JOB_ID` to read the full findings.
+- Failed, cancelled, or invalid reviews don't count as a pass.
+- After a blocking review, the automatic gate skips the continuation to avoid a
+  loop. Run `$claude:review --wait` to check the fixes.
 
-Codex skips untrusted hooks. Enabling the gate does not change hook trust or
-override a global or administrator setting that disables hooks.
+The gate skips non-Git directories and reports when it has no starting snapshot.
+Changes made by another process during the same turn are included. Automatic
+reviews count toward Claude's usage limits and appear as `stop-review-gate` jobs
+in status; you can inspect or cancel them like any other review.
 
-At UserPromptSubmit, the hook snapshots the checkout's file contents for the
-session and turn. At Stop, it compares the current contents with that snapshot.
-If nothing changed, it skips Claude even when older uncommitted edits exist.
-Otherwise, Claude receives only the turn's Git diff, without conversation text,
-and can inspect surrounding files with read-only tools. Edits committed during
-the turn are included; staging or committing existing edits alone does not
-trigger a review. Snapshots use a separate index and object store in the plugin
-data directory, leaving the checkout's index and history untouched.
+## Privacy and storage
 
-If the starting snapshot is missing, the hook skips with an explanatory message
-instead of reviewing older changes. Concurrent external edits during the same
-turn are included: the comparison identifies when contents changed, not who
-edited them. Ignored untracked files are excluded.
+Claude gets only the `Read`, `Glob`, and `Grep` tools. The plugin disables
+Claude's hooks, skills, MCP tools, and session persistence, and loads user
+settings for credentials and model defaults. It doesn't load project or local
+Claude settings. These are CLI restrictions, not an operating-system sandbox.
 
-Review outcomes:
+Review data is stored outside your checkout with private file permissions:
 
-- `ALLOW` lets Codex finish.
-- `BLOCK` reports that issues still need fixes, followed by the reviewer's
-  first-line summary and job ID. Use `$claude:result JOB_ID` for full findings.
-- Failed, cancelled, and malformed reviews return feedback instead of counting
-  as a pass. Failure messages separate the error, job ID, and recovery commands
-  onto individual lines.
-- A continuation triggered by a Stop hook skips automatic review to prevent
-  endless loops. Run `$claude:review` to verify fixes.
-- Non-Git directories skip review.
+```text
+~/.codex/plugins/data/claude-review/jobs/
+```
 
-Automatic runs consume Claude account usage, including when Claude decides a
-turn needs no further review. They use Claude's configured model and effort,
-have a 14-minute review timeout inside a 15-minute hook timeout, and appear as
-`stop-review-gate` jobs in `$claude:status`. Use `$claude:result JOB_ID` for the
-full decision or `$claude:cancel JOB_ID` to cancel a running review. The
-reviewer's own Claude hooks are disabled to avoid recursive reviews.
+This includes prompts, findings, progress, large-diff snapshots, and gate state,
+grouped by checkout. The data may contain source code and stays there until you
+delete it. Remove old data only after its jobs have finished. Set
+`CLAUDE_REVIEW_DATA_DIR` to use another location.
 
-## Execution and storage
+<details>
+<summary>Runtime details</summary>
 
-The runtime calls `claude --print` with only `Read`, `Glob`, and `Grep`
-available. It disables hooks, slash commands, session persistence, and MCP
-tools. It loads user settings for credentials and model defaults, while
-excluding project and local settings. It never grants Bash, Edit, Write, or
-subagent tools. These are CLI tool restrictions, not an operating-system
-sandbox; the host's permissions still apply. Claude cannot execute tests during
-these reviews.
+- Explicit reviews have a 20-minute timeout. Automatic reviews have a 14-minute
+  timeout inside a 15-minute hook timeout.
+- Diffs up to 256 KiB go into the prompt. Larger diffs are streamed to a
+  snapshot file. A complete snapshot doesn't guarantee Claude inspected every
+  part; the reviewer must report anything it couldn't inspect.
+- Adversarial reviews use Claude's `--json-schema` option. The runtime validates
+  the `structured_output` result and renders it as Markdown. Missing output and
+  schema failures remain failed reviews.
+- Progress comes from streamed tool and text events. A separate heartbeat tracks
+  worker liveness; a stale heartbeat marks a job as interrupted.
+- Cancellation stops the worker's own Claude process. The plugin doesn't set
+  `--max-turns` or create resumable Claude sessions.
+- Turn snapshots use a separate Git index and object store, leaving your index
+  and history untouched.
 
-Explicit reviews get a fresh process and a 20-minute timeout. The plugin does
-not set `--max-turns`; turn limits are left to Claude Code. Background workers
-update a heartbeat and handle cancellation requests by stopping their own Claude
-child. A missing heartbeat marks a job as interrupted rather than successful.
-Jobs continue when a Codex thread ends; use the job ID to cancel them
-explicitly. There are no background completion notifications; status and result
-are the supported way to check background work.
-
-Prompts, findings, progress, large-diff snapshots, and job metadata are stored
-with private file permissions under `~/.codex/plugins/data/claude-review/jobs/`,
-grouped by repository path. Set `CLAUDE_REVIEW_DATA_DIR` to choose another
-writable location. Artifacts may contain source code and are retained until you
-delete them; remove old job directories after their workers finish. They are
-never written into the reviewed checkout. The gate setting is stored as
-`gate.json` in the same checkout-specific data directory. Separate worktrees
-have independent gate settings.
+</details>
 
 ## Development
+
+No runtime npm dependencies or build step are needed. For development:
 
 ```sh
 npm ci
@@ -210,41 +206,39 @@ npm run check
 npm run format
 ```
 
-`check` runs ESLint, Prettier verification, plugin and skill validation, and
-Node's test runner. ESLint limits function size, complexity, and nesting. CI
-runs on macOS and Linux with Node 22 and 24. Integration tests use real
-temporary Git repositories and a fake Claude CLI, requiring no account or model
-calls.
+`check` runs linting, formatting checks, plugin and skill validation, and tests.
+CI covers macOS and Linux with Node 22 and 24. Tests use temporary Git
+repositories and a fake Claude CLI, so they don't consume Claude usage.
 
-The CLI can also be used directly from any repository:
+To install from a local checkout, run these commands from the repository root:
+
+```sh
+codex plugin marketplace add .
+codex plugin add claude@linuxhq
+```
+
+Start a new Codex session, then run `$claude:setup`.
+
+The plugin lives in `plugins/claude/`. You can also call its CLI directly:
 
 ```sh
 node /path/to/cc-plugin-codex/plugins/claude/scripts/claude-review.mjs help
 ```
 
-Direct CLI calls default to foreground execution; the mode-selection question
-belongs to the skills in Codex.
+Direct CLI calls run in the foreground by default. The execution-mode question
+is part of the Codex skills.
 
-The distributable plugin lives in `plugins/claude/`. Skills describe the
-commands; `scripts/lib/` contains focused modules for arguments, Git context,
-subprocesses, Claude invocation, job storage, and worker execution. Review
-prompts live in `prompts/`.
+## Credits and references
 
-## References
+The review skills, adversarial prompt, and parts of the runtime are adapted from
+[OpenAI's Codex plugin for Claude Code][openai-plugin], with Claude as the
+reviewer and execution adapted for Codex. See [NOTICE](plugins/claude/NOTICE)
+for the upstream revision and attribution, and [LICENSE](plugins/claude/LICENSE)
+for the Apache 2.0 terms covering copied material.
 
-The two review skills and adversarial prompt are adapted from [OpenAI's Codex
-plugin for Claude Code][openai-plugin]. Their wording and review workflow follow
-upstream, with Claude names, Codex skill metadata, and host execution tools
-substituted. Claude provides the normal correctness review in place of Codex's
-native reviewer. Background jobs use this plugin's worker instead of Claude
-Code's background-task tool. Provider-specific options remain available.
-
-Source attribution, the pinned upstream revision, and adaptation details are in
-[`plugins/claude/NOTICE`](plugins/claude/NOTICE); copied material retains its
-Apache 2.0 license in [`plugins/claude/LICENSE`](plugins/claude/LICENSE).
-
-Packaging follows [Codex plugin documentation][codex-plugins]. Claude invocation
-follows the [Claude Code CLI reference][claude-cli].
+- [Codex plugin documentation][codex-plugins]
+- [Codex hooks][codex-hooks]
+- [Claude Code CLI reference][claude-cli]
 
 [claude-cli]: https://code.claude.com/docs/en/cli-reference
 [claude-setup]: https://code.claude.com/docs/en/setup
