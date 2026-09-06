@@ -1,3 +1,4 @@
+import { renderGateResult } from './gate-output.mjs';
 import { spawn } from 'node:child_process';
 import { open, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -123,5 +124,9 @@ export async function result(root, id) {
       failed: ['failed', 'cancelled', 'interrupted'].includes(state),
     };
   }
-  return { text: `${job.output}\n\nReview job: ${job.id}`, failed: false };
+  const output =
+    job.command === 'stop-review-gate'
+      ? renderGateResult(job.output)
+      : job.output;
+  return { text: `${output}\n\nReview job: ${job.id}`, failed: false };
 }

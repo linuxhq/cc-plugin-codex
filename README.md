@@ -139,19 +139,23 @@ $claude:setup --disable-review-gate
 
 The gate sends the previous Codex response to Claude. Claude checks the
 repository and returns `ALLOW` after successful inspection without blocking
-findings, `BLOCK` for issues that need fixing, or `INCOMPLETE` when no edits
-need review or inspection cannot complete. Use `$claude:result JOB_ID` for full
-findings.
+findings, `BLOCK` for issues that need fixing, `SKIP` when no edits need review,
+or `INCOMPLETE` when inspection cannot complete. Use `$claude:result JOB_ID` for
+full findings.
 
 The gate skips continued Stop turns (`stop_hook_active`) to prevent repeated
 blocking. Only a valid blocking verdict stops the turn. Authentication errors,
 timeouts, invalid output, and unreadable configuration produce a notice with
-recovery guidance. Passing reviews include a rationale and job ID. Missing,
-failed, or truncated inspection produces an INCOMPLETE notice, even if the model
-claims ALLOW. The runtime checks a private inspection record written by its MCP
-server. The verdict uses a validated JSON schema; repository text remains
-untrusted evidence, and model review is not a security boundary against prompt
-injection.
+recovery guidance. Successful reviews and no-edit skips are silent. Blocked
+reviews show only the first-line reason and a `$claude:result JOB_ID` command
+for full details. Missing, failed, or truncated inspection produces an
+INCOMPLETE notice, even if the model claims ALLOW. Blocking findings and
+SKIP/INCOMPLETE explanations are preserved even when inspection fails. Page
+boundaries defer whole lines; a single line exceeding the byte limit still
+produces incomplete evidence. The runtime checks a private inspection record
+written by its MCP server. The verdict uses a validated JSON schema; repository
+text remains untrusted evidence, and model review is not a security boundary
+against prompt injection.
 
 ## Privacy and storage
 

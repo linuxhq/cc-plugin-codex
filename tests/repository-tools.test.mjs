@@ -201,3 +201,39 @@ test('large diffs stream and long lines truncate', async (t) => {
     /after-long-line/,
   );
 });
+
+test('page boundaries defer whole lines without truncation', async (t) => {
+  const f = await fixture(t);
+  const first = 'a'.repeat(180000);
+  const second = 'b'.repeat(100000);
+  await f.write('app.js', first + '\n' + second + '\n');
+  let incomplete = false;
+  const options = {
+    onIncomplete() {
+      incomplete = true;
+    },
+  };
+  const page = await repo.inspectRepository(
+    f.repo,
+    {
+      operation: 'read',
+      path: 'app.js',
+    },
+    options,
+  );
+  assert.match(page, /next offset 1/);
+  assert.ok(page.includes(first));
+  assert.doesNotMatch(page, /truncated/);
+  const next = await repo.inspectRepository(
+    f.repo,
+    {
+      operation: 'read',
+      path: 'app.js',
+      offset: 1,
+    },
+    options,
+  );
+  assert.ok(next.includes(second));
+  assert.match(next, /next offset 2/);
+  assert.equal(incomplete, false);
+});

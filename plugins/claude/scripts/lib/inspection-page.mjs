@@ -37,6 +37,12 @@ export function inspectionPage({ offset = 0, limit = 500 } = {}, options = {}) {
       return;
     }
     const buffer = Buffer.from(rendered);
+    // Retry this whole line on the next page instead of losing its tail merely
+    // because preceding lines used the byte budget.
+    if (shouldDefer(count, skipped, buffer.length, room)) {
+      full = true;
+      return;
+    }
     const clipped = buffer.subarray(0, room).toString('utf8');
     const lost = skipped + Math.max(0, buffer.length - room);
     const marker = lost ? ` [truncated ${lost} bytes on line ${line + 1}]` : '';
@@ -72,4 +78,8 @@ function splitRecords(chunk, separator, append, record) {
     start = end + separator.length;
   }
   append(chunk.slice(start));
+}
+
+function shouldDefer(count, skipped, length, room) {
+  return count > 0 && (skipped > 0 || length > room);
 }

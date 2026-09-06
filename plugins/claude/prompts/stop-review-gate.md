@@ -5,7 +5,7 @@ Only review it if Codex actually did code changes in that turn.
 Pure status, setup, or reporting output does not count as reviewable work.
 For example, the output of $claude:setup or $claude:status does not count.
 Only direct edits made in that specific turn count.
-If the previous Codex turn was only a status update, a summary, a setup/login check, a review result, or output from a command that did not itself make direct edits in that turn, return INCOMPLETE with a reason that no code edits need review.
+If the previous Codex turn was only a status update, a summary, a setup/login check, a review result, or output from a command that did not itself make direct edits in that turn, return SKIP with a reason that no code edits need review.
 Challenge whether that specific work and its design choices should ship.
 
 {{CODEX_RESPONSE_BLOCK}}
@@ -13,14 +13,18 @@ Challenge whether that specific work and its design choices should ship.
 
 <compact_output_contract>
 Return a JSON object matching the supplied schema with exactly these fields:
-- decision: "ALLOW", "BLOCK", or "INCOMPLETE"
+- decision: "ALLOW", "BLOCK", "INCOMPLETE", or "SKIP"
 - reason: a nonempty, concise explanation grounded in inspected evidence.
+Keep the reason compact. Its first line must be a short, standalone reason
+for the decision. Put any supporting details on subsequent lines; only the first
+line is shown by the hook when blocking. Successful reviews are silent.
 Do not put Markdown or other text around the JSON.
 </compact_output_contract>
 
 <default_follow_through_policy>
 Use ALLOW only after successful inspection with no blocking issue.
-Use INCOMPLETE when no code edits need review, inspection fails, evidence is
+Use SKIP only when the previous turn made no code edits.
+Use INCOMPLETE when inspection fails, evidence is
 truncated or unavailable, or you cannot substantiate a complete review.
 Use BLOCK only if the previous turn made code changes and you found something that still needs to be fixed before stopping.
 </default_follow_through_policy>

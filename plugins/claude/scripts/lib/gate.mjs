@@ -11,11 +11,6 @@ export { gateFailure, parseGateOutput } from './gate-output.mjs';
 
 export async function runGate(input) {
   if (input.hook_event_name !== 'Stop') return {};
-  if (input.stop_hook_active)
-    return {
-      systemMessage:
-        'Claude automatic review skipped after a continued Stop turn.',
-    };
   let repo;
   try {
     repo = await repositoryRoot(input.cwd || process.cwd());
@@ -43,6 +38,11 @@ export async function runGate(input) {
     );
   }
   if (!config.enabled) return note ? { systemMessage: note } : {};
+  if (input.stop_hook_active)
+    return {
+      systemMessage:
+        'Claude automatic review skipped after a continued Stop turn.',
+    };
   try {
     const available = await runProcess('claude', ['--version']);
     if (available.code !== 0) throw new Error('Claude is unavailable.');
@@ -86,7 +86,8 @@ async function reviewResponse(repo, root, input) {
         `\nReview job: ${job.id}`,
     );
   const decision = parseGateOutput(completed.output);
+  if (!decision.reason && !decision.systemMessage) return decision;
   const field = decision.reason ? 'reason' : 'systemMessage';
-  decision[field] += `\nReview job: ${job.id}`;
+  decision[field] += `\n\nFull review: $claude:result ${job.id}`;
   return decision;
 }

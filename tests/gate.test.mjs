@@ -126,7 +126,8 @@ test('bundled command handles spaces and stores findings', async (t) => {
   assert.equal(
     decision.reason,
     'Claude stop-time review found issues that still need fixes before ' +
-      `ending the session: Regression\nP2 app.js:1 example.\nReview job: ${id}`,
+      'ending the session.\n\nRegression\n\n' +
+      `Full review: $claude:result ${id}`,
   );
   assert.match((await f.run(['result', id])).stdout, /P2 app.js:1 example/);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
@@ -167,8 +168,8 @@ test('ALLOW passes for a checkout with changes', async (t) => {
     },
   );
   assert.equal(output.code, 0);
-  assert.match(JSON.parse(output.stdout).systemMessage, /review passed/);
-  assert.match((await f.run(['result'])).stdout, /ALLOW/);
+  assert.deepEqual(JSON.parse(output.stdout), {});
+  assert.match((await f.run(['result'])).stdout, /review passed/);
 });
 
 test('continued turns skip reviews; unrelated events do not', async (t) => {
@@ -301,10 +302,9 @@ test('decision parser requires a structured, nonempty verdict', () => {
     assert.equal(parsed.decision, undefined);
     assert.match(parsed.systemMessage, /invalid decision/);
   }
-  assert.match(
-    parseGateOutput('{"decision":"ALLOW","reason":"No findings."}')
-      .systemMessage,
-    /passed/,
+  assert.deepEqual(
+    parseGateOutput('{"decision":"ALLOW","reason":"No findings."}'),
+    {},
   );
   assert.equal(
     parseGateOutput('{"decision":"BLOCK","reason":"Regression"}').decision,
@@ -337,7 +337,7 @@ test('reporting turns use the response review', async (t) => {
       }),
     },
   );
-  assert.match(JSON.parse(output.stdout).systemMessage, /review passed/);
+  assert.deepEqual(JSON.parse(output.stdout), {});
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   assert.ok(request.input.includes(message));
   assert.match(request.input, /Pure status, setup, or reporting output/);
@@ -438,4 +438,62 @@ test('missing or failed inspection cannot be reported as ALLOW', async (t) => {
     assert.match(decision.systemMessage, /could not complete/);
     assert.doesNotMatch(decision.systemMessage, /review passed/);
   }
+});
+
+test('failed inspection preserves non-approval verdicts', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  for (const verdict of ['BLOCK', 'INCOMPLETE']) {
+    const output = await runHook(
+      f,
+      {},
+      {
+        FAKE_CLAUDE_MODE: 'inspection-failed',
+        FAKE_CLAUDE_OUTPUT: JSON.stringify({
+          decision: verdict,
+          reason: 'Specific evidence and explanation.',
+        }),
+      },
+    );
+    const decision = JSON.parse(output.stdout);
+    assert.match(
+      decision.reason || decision.systemMessage,
+      /Specific evidence/,
+    );
+    assert.equal(decision.decision, verdict === 'BLOCK' ? 'block' : undefined);
+  }
+});
+
+test('SKIP needs no inspection and renders readable results', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  const output = await runHook(
+    f,
+    { last_assistant_message: 'Status only.' },
+    {
+      FAKE_CLAUDE_MODE: 'no-inspection',
+      FAKE_CLAUDE_OUTPUT: JSON.stringify({
+        decision: 'SKIP',
+        reason: 'No code edits need review.',
+      }),
+    },
+  );
+  assert.deepEqual(JSON.parse(output.stdout), {});
+  const result = (await f.run(['result'])).stdout;
+  assert.match(result, /# Claude Automatic Review/);
+  assert.match(result, /No code edits/);
+  assert.doesNotMatch(result, /"decision":/);
+});
+
+test('continued turns respect disabled gates and non-repos', async (t) => {
+  const f = await fixture(t);
+  assert.deepEqual(
+    JSON.parse((await runHook(f, { stop_hook_active: true })).stdout),
+    {},
+  );
+  await rm(join(f.repo, '.git'), { recursive: true });
+  const output = JSON.parse(
+    (await runHook(f, { stop_hook_active: true })).stdout,
+  );
+  assert.doesNotMatch(output.systemMessage, /continued Stop/);
 });

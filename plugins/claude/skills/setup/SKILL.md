@@ -29,7 +29,8 @@ installing or updating the plugin.
 
 The gate sends the previous Codex response to Claude to review that turn's work.
 Claude returns ALLOW after successful inspection without blocking findings,
-BLOCK for issues that need fixing, or INCOMPLETE when no edits need review or
-inspection cannot complete. Continued Stop turns skip the gate to avoid repeated
-blocking. Infrastructure failures return a notice instead of blocking. Reviews
-consume Claude usage and appear in status, result, and cancel commands.
+BLOCK for issues that need fixing, or SKIP when no edits need review, or
+INCOMPLETE when inspection cannot complete. Continued Stop turns skip the gate
+to avoid repeated blocking. Infrastructure failures return a notice instead of
+blocking. Reviews consume Claude usage and appear in status, result, and cancel
+commands.
