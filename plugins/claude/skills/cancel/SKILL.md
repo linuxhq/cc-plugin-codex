@@ -1,7 +1,7 @@
 ---
 name: cancel
-description: Cancel an active Claude job
-argument-hint: '[job-id]'
+description: >-
+  Cancel an active Claude job. Args: [job-id].
 ---
 
 Resolve the plugin root two directories above this skill directory. Run from the

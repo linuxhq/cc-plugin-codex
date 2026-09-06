@@ -57,6 +57,22 @@ test('background worker completes and exposes stored results', async (t) => {
   assert.match((await f.run(['cancel', id])).stdout, /already completed/);
 });
 
+test('prints and persists provider diagnostics', async (t) => {
+  const f = await fixture(t);
+  await f.write('app.js', 'changed\n');
+  const run = await f.run(['review'], { FAKE_CLAUDE_MODE: 'json-error' });
+  assert.equal(run.code, 1);
+  const id = extractId(run.stdout);
+  const saved = await f.run(['result', id]);
+  assert.equal(saved.code, 1);
+  for (const output of [run.stdout, saved.stdout]) {
+    assert.match(output, /failed/);
+    assert.match(output, /Provider request failed/);
+    assert.match(output, /Account quota exhausted/);
+    assert.match(output, /Request could not complete/);
+  }
+});
+
 test('cancellation stops a running background Claude process', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', 'changed\n');

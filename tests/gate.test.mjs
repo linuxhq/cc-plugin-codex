@@ -216,6 +216,21 @@ test('gate settings are per worktree, shared by subdirectories', async (t) => {
   assert.equal(JSON.parse(output.stdout).decision, 'block');
 });
 
+test('gate preserves diagnostics from both streams', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  await f.write('app.js', 'changed\n');
+  const output = await runHook(f, {}, { FAKE_CLAUDE_MODE: 'json-error' });
+  const decision = JSON.parse(output.stdout);
+  assert.equal(decision.decision, 'block');
+  assert.match(decision.reason, /Provider request failed/);
+  assert.match(decision.reason, /Account quota exhausted/);
+  assert.match(decision.reason, /Request could not complete/);
+  const saved = await f.run(['result', extractId(decision.reason)]);
+  assert.equal(saved.code, 1);
+  assert.match(saved.stdout, /Provider request failed/);
+});
+
 test('non-Git directories skip and plain setup works', async (t) => {
   const f = await fixture(t);
   await rm(join(f.repo, '.git'), { recursive: true });

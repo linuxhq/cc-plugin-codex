@@ -1,7 +1,8 @@
 ---
 name: setup
-description: Check Claude setup and toggle reviews
-argument-hint: '[--enable-review-gate|--disable-review-gate]'
+description: >-
+  Check Claude setup and toggle reviews. Args: --enable-review-gate,
+  --disable-review-gate.
 ---
 
 Resolve the plugin root two directories above this skill directory. Run from the

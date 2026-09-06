@@ -19,6 +19,17 @@ if (args[0] === '--version') {
   if (mode === 'fail') {
     console.error('Provider unavailable');
     process.exitCode = 2;
+  } else if (mode === 'json-error') {
+    console.log(
+      JSON.stringify({
+        subtype: 'success',
+        is_error: true,
+        result: 'Provider request failed',
+        errors: ['Account quota exhausted'],
+      }),
+    );
+    console.error('Request could not complete');
+    process.exitCode = 1;
   } else if (mode === 'malformed') {
     console.log('not json');
   } else {

@@ -1,7 +1,7 @@
 ---
 name: status
-description: Show active and recent Claude jobs
-argument-hint: '[job-id]'
+description: >-
+  Show active and recent Claude jobs. Args: [job-id].
 ---
 
 Resolve the plugin root two directories above this skill directory. Run from the

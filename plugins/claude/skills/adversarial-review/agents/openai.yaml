@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Claude Adversarial Review'
+  short_description:
+    'Args: [focus ...], --base REF, --scope SCOPE, --background'

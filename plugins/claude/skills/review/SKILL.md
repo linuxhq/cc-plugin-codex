@@ -1,8 +1,8 @@
 ---
 name: review
-description: Review Git changes with Claude
-argument-hint: >-
-  [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]
+description: >-
+  Review Git changes with Claude. Args: --wait, --background, --base REF,
+  --scope auto|working-tree|branch, --model MODEL, --effort LEVEL.
 ---
 
 Run the bundled CLI from the user's repository:

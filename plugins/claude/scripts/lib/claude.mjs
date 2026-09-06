@@ -77,31 +77,68 @@ export async function reviewWithClaude(job, signal) {
       job.command === 'stop-review-gate' ? 14 * 60 * 1000 : 20 * 60 * 1000,
     signal,
   });
-  if (result.code !== 0)
-    throw new Error(
-      result.stderr.trim() || `Claude exited with code ${result.code}.`,
-    );
-  return parseResult(result.stdout);
+  return parseResult(result.stdout, result);
 }
 
-export function parseResult(stdout) {
-  let result;
-  try {
-    result = JSON.parse(stdout);
-  } catch {
-    throw new Error('Claude returned invalid JSON; review did not complete.');
-  }
-  if (!result || result.is_error || result.subtype !== 'success') {
-    throw new Error(
-      result?.result ||
-        result?.errors?.join('\n') ||
-        'Claude did not complete the review.',
-    );
+export function parseResult(stdout, { code = 0, stderr = '' } = {}) {
+  const result = decodeResult(stdout, stderr, code);
+  if (
+    code !== 0 ||
+    !result ||
+    result.is_error ||
+    result.subtype !== 'success'
+  ) {
+    throw new Error(failureMessage(result, stdout, stderr, code));
   }
   if (typeof result.result !== 'string' || !result.result.trim()) {
-    throw new Error('Claude returned an empty review.');
+    throw new Error(diagnostics('Claude returned an empty review.', stderr));
   }
   return result.result;
+}
+
+function decodeResult(stdout, stderr, code) {
+  try {
+    return JSON.parse(stdout);
+  } catch {
+    if (code !== 0)
+      throw new Error(
+        diagnostics(stdout, stderr) || `Claude exited with code ${code}.`,
+      );
+    throw new Error(
+      diagnostics(
+        'Claude returned invalid JSON; review did not complete.',
+        stdout,
+        stderr,
+      ),
+    );
+  }
+}
+
+function failureMessage(result, stdout, stderr, code) {
+  const detail = diagnostics(
+    result?.result,
+    ...(Array.isArray(result?.errors) ? result.errors : [result?.errors]),
+    result?.error,
+    result?.message,
+    stderr,
+  );
+  return (
+    detail ||
+    (code !== 0 ? stdout.trim() : '') ||
+    (code !== 0
+      ? `Claude exited with code ${code}.`
+      : 'Claude did not complete the review.')
+  );
+}
+
+function diagnostics(...values) {
+  const messages = values
+    .filter((value) => value !== null && value !== undefined)
+    .map((value) =>
+      typeof value === 'string' ? value.trim() : JSON.stringify(value),
+    )
+    .filter(Boolean);
+  return [...new Set(messages)].join('\n');
 }
 
 export async function checkSetup() {

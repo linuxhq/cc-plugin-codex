@@ -1,0 +1,3 @@
+interface:
+  display_name: 'Claude Result'
+  short_description: "Args: [job-id]. Show a Claude job's results."

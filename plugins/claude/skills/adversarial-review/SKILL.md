@@ -1,9 +1,9 @@
 ---
 name: adversarial-review
-description: Challenge code and design with Claude
-argument-hint: >-
-  [--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [focus
-  ...]
+description: >-
+  Challenge code and design with Claude. Args: [focus ...], --wait,
+  --background, --base REF, --scope auto|working-tree|branch, --model MODEL,
+  --effort LEVEL, --focus-file PATH.
 ---
 
 Run from the user's repository, resolving the plugin root two directories above
