@@ -118,6 +118,8 @@ test('adversarial schema is enforced and missing output fails', async (t) => {
   const schema = JSON.parse(
     request.args[request.args.indexOf('--json-schema') + 1],
   );
+  // Claude rejects the Draft 2020-12 meta-schema; use its default dialect.
+  assert.equal(Object.hasOwn(schema, '$schema'), false);
   assert.deepEqual(schema.properties.verdict.enum, [
     'approve',
     'needs-attention',
