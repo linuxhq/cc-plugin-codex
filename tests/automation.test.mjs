@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fixture, eventually } from './helpers.mjs';
 import { fingerprint } from '../plugins/claude/scripts/lib/git.mjs';
-import { createJob, saveJob } from '../plugins/claude/scripts/lib/store.mjs';
+import {
+  createJob,
+  saveJob,
+  jobPath,
+} from '../plugins/claude/scripts/lib/store.mjs';
+import { saveProgress } from '../plugins/claude/scripts/lib/progress.mjs';
 
 const rootFor = (f) =>
   join(f.env.CLAUDE_REVIEW_DATA_DIR, 'jobs', fingerprint(f.repo).slice(0, 24));
@@ -18,7 +23,7 @@ test('JSON preserves results and honors cwd and model aliases', async (t) => {
     'review',
     '--wait',
     '--json',
-    '--cwd',
+    '-C',
     nested,
     '-m',
     'provider/model',
@@ -41,6 +46,87 @@ test('JSON preserves results and honors cwd and model aliases', async (t) => {
   const structured = JSON.parse(adversarial.stdout).job.structuredOutput;
   assert.equal(structured.verdict, 'needs-attention');
   assert.equal(structured.findings[0].confidence, 0.9);
+});
+
+test('result and cancel respect session scope', async (t) => {
+  const f = await fixture(t);
+  const root = rootFor(f);
+  async function job(sessionId, state, updatedAt) {
+    const value = await createJob(root, {
+      repo: f.repo,
+      command: 'review',
+      sessionId,
+    });
+    await saveJob(root, {
+      ...value,
+      state,
+      updatedAt,
+      error: 'Stored failure',
+    });
+    return value;
+  }
+  const older = await job('test-session', 'failed', '2026-01-01T00:00:01Z');
+  const finished = await job('test-session', 'failed', '2026-01-01T00:00:02Z');
+  const running = await job('test-session', 'running');
+  const other = await job('other-session', 'running');
+  // A job created earlier but updated later should supply the default result.
+  await saveProgress(root, older.id, { updatedAt: '2099-01-01T00:00:00Z' });
+  const result = await f.run(['result', '--json']);
+  assert.equal(result.code, 1);
+  assert.equal(JSON.parse(result.stdout).job.id, older.id);
+  const cancel = await f.run(['cancel', '--json']);
+  assert.equal(cancel.code, 0, cancel.stderr);
+  assert.equal(JSON.parse(cancel.stdout).job.id, running.id);
+  await access(jobPath(root, running.id, 'cancel'));
+  await assert.rejects(access(jobPath(root, other.id, 'cancel')));
+  const second = await job('test-session', 'queued');
+  const ambiguous = await f.run(['cancel', '--json']);
+  assert.equal(ambiguous.code, 1);
+  assert.match(JSON.parse(ambiguous.stdout).error, /Multiple review jobs/);
+  await assert.rejects(access(jobPath(root, second.id, 'cancel')));
+  const explicit = await f.run(['cancel', other.id.slice(0, 16), '--json']);
+  assert.equal(JSON.parse(explicit.stdout).job.id, other.id);
+  const foreignResult = await f.run(['result', finished.id, '--json'], {
+    CODEX_THREAD_ID: 'other-session',
+  });
+  assert.equal(JSON.parse(foreignResult.stdout).job.id, finished.id);
+  for (const command of ['cancel', 'result']) {
+    const empty = await f.run([command, '--json'], {
+      CODEX_THREAD_ID: 'empty-session',
+    });
+    assert.equal(empty.code, 1);
+    assert.match(JSON.parse(empty.stdout).error, /this session/);
+  }
+});
+
+test('status orders and limits history by last activity', async (t) => {
+  const f = await fixture(t);
+  const root = rootFor(f);
+  const jobs = [];
+  for (let i = 0; i < 11; i++) {
+    const job = await createJob(root, {
+      repo: f.repo,
+      command: 'review',
+      sessionId: 'test-session',
+    });
+    await saveJob(root, { ...job, state: i < 2 ? 'running' : 'failed' });
+    await saveProgress(root, job.id, {
+      updatedAt: new Date(Date.UTC(2099, 0, 11 - i)).toISOString(),
+    });
+    jobs.push(job);
+  }
+  const report = JSON.parse((await f.run(['status', '--json'])).stdout);
+  assert.deepEqual(
+    report.running.map((job) => job.id),
+    jobs.slice(0, 2).map((job) => job.id),
+  );
+  assert.equal(report.latestFinished.id, jobs[2].id);
+  assert.deepEqual(
+    report.recent.map((job) => job.id),
+    jobs.slice(3, 8).map((job) => job.id),
+  );
+  const all = JSON.parse((await f.run(['status', '--all', '--json'])).stdout);
+  assert.equal(all.recent.length, 8);
 });
 
 test('JSON handles setup, empty reviews, and errors', async (t) => {

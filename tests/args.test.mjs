@@ -30,6 +30,7 @@ for (const args of [
   ['review', '--scope', 'staged'],
   ['review', 'custom focus'],
   ['review', '--focus-file', 'focus.txt'],
+  ['adversarial-review', '--focus-file', 'focus.txt'],
   ['review', '--effort', 'extreme'],
   ['review', '--unknown'],
   ['review', '--base', ''],

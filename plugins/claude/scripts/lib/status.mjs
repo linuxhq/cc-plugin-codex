@@ -19,24 +19,43 @@ export async function jobSnapshot(root, job) {
     state,
     status: state,
     progress,
+    updatedAt: [
+      job.createdAt,
+      job.startedAt,
+      job.finishedAt,
+      job.updatedAt,
+      progress.updatedAt,
+    ]
+      .filter(Boolean)
+      .sort()
+      .at(-1),
     elapsedMs: Math.max(0, end - start),
   };
 }
 
-const active = (job) => ['queued', 'running', 'cancelling'].includes(job.state);
+export const active = (job) =>
+  ['queued', 'running', 'cancelling'].includes(job.state);
 
-export async function statusReport(root, options = {}) {
-  if (options.id) return singleStatus(root, options);
+export async function sessionJobs(root) {
   let jobs = await listJobs(root);
   const sessionId = currentSessionId();
   if (sessionId) jobs = jobs.filter((job) => job.sessionId === sessionId);
   const snapshots = await Promise.all(
     jobs.map((job) => jobSnapshot(root, job)),
   );
+  return snapshots.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function statusReport(root, options = {}) {
+  if (options.id) return singleStatus(root, options);
+  const sessionId = currentSessionId();
+  const snapshots = await sessionJobs(root);
   const running = snapshots.filter(active);
   const finished = snapshots.filter((job) => !active(job));
   const latestFinished = finished[0] || null;
-  const recent = options.all ? finished.slice(1) : finished.slice(1, 8);
+  const recent = (options.all ? snapshots : snapshots.slice(0, 8)).filter(
+    (job) => !active(job) && job.id !== latestFinished?.id,
+  );
   const payload = {
     workspaceRoot: options.repo,
     sessionId,
@@ -45,7 +64,11 @@ export async function statusReport(root, options = {}) {
     latestFinished,
     recent,
   };
-  const visible = [...running, ...finished.slice(0, recent.length + 1)];
+  const visible = [
+    ...running,
+    ...(latestFinished ? [latestFinished] : []),
+    ...recent,
+  ];
   return { payload, text: renderTable(visible, payload.config.stopReviewGate) };
 }
 

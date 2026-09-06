@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
 import { fixture, extractId, eventually } from './helpers.mjs';
 
@@ -142,12 +141,11 @@ test('rejects job path traversal', async (t) => {
   assert.match(run.stderr, /Invalid job ID/);
 });
 
-test('focus files handle newlines and shell syntax', async (t) => {
+test('focus text preserves newlines and shell syntax', async (t) => {
   const f = await fixture(t);
-  const path = join(f.root, 'focus.md');
-  await writeFile(path, 'First line\nSecond $line `literal`');
+  const focus = 'First line\nSecond $line `literal`';
   await f.write('app.js', 'changed\n');
-  const run = await f.run(['adversarial-review', '--focus-file', path]);
+  const run = await f.run(['adversarial-review', '--', focus]);
   assert.equal(run.code, 0, run.stderr);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE, 'utf8'));
   assert.ok(request.input.includes('First line\nSecond $line `literal`'));

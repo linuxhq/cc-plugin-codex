@@ -12,9 +12,10 @@ node "/absolute/plugin/root/scripts/claude-review.mjs" result
 ```
 
 Pass the user's optional job ID separately. Preserve any supplied `--cwd PATH`
-or `--json` flags. Without an ID, retrieve the latest job in this checkout,
-including a running or failed job. Do not silently select an older successful
-review.
+or `--json` flags. Without an ID, retrieve the most recently updated finished
+job in this session, including failed or cancelled jobs. Without a session ID,
+use repository history. An explicit job ID can select a job from another
+session.
 
 Present the full command output to the user. Do not summarize or condense it.
 Preserve all details including:

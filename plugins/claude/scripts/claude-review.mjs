@@ -8,6 +8,8 @@ import {
   prepareJob,
   result,
   selectJob,
+  selectCancelableJob,
+  selectResultJob,
 } from './lib/jobs.mjs';
 import { storeRoot } from './lib/store.mjs';
 import { executeJob } from './lib/worker.mjs';
@@ -29,7 +31,7 @@ async function main(options) {
     return emit(report.payload, report.text, options.json);
   }
   if (options.command === 'cancel') {
-    const selected = await selectJob(root, options.id);
+    const selected = await selectCancelableJob(root, options.id);
     const text = await cancelJob(root, selected.id);
     const job = await jobSnapshot(root, await selectJob(root, selected.id));
     return emit({ job, message: text }, text, options.json);
@@ -75,7 +77,7 @@ async function showSetup(options) {
 }
 
 async function showResult(root, id, json) {
-  const selected = await selectJob(root, id);
+  const selected = await selectResultJob(root, id);
   const output = await result(root, selected.id);
   const job = await jobSnapshot(root, await selectJob(root, selected.id));
   emit({ job, output: output.text, failed: output.failed }, output.text, json);

@@ -2,7 +2,10 @@ import { parseArgs } from 'node:util';
 
 const reviewCommands = ['review', 'adversarial-review'];
 const jobCommands = ['status', 'result', 'cancel'];
-const commonOptions = { cwd: { type: 'string' }, json: { type: 'boolean' } };
+const commonOptions = {
+  cwd: { type: 'string', short: 'C' },
+  json: { type: 'boolean' },
+};
 
 export function parseCommand(argv) {
   const [command = 'help', ...args] = argv;
@@ -81,7 +84,6 @@ function parseReview(command, args) {
       effort: { type: 'string' },
       background: { type: 'boolean', default: false },
       wait: { type: 'boolean', default: false },
-      'focus-file': { type: 'string' },
     },
   });
   validateCommon(values);
@@ -92,14 +94,14 @@ function parseReview(command, args) {
   ) {
     throw new Error('Effort must be low, medium, high, xhigh, or max.');
   }
-  if (command === 'review' && (positionals.length || values['focus-file'])) {
+  if (command === 'review' && positionals.length) {
     throw new Error('Use adversarial-review for custom focus text.');
   }
   return { command, ...values, focus: positionals.join(' ') };
 }
 
 function validateScope(values) {
-  for (const key of ['base', 'model', 'effort', 'focus-file']) {
+  for (const key of ['base', 'model', 'effort']) {
     if (values[key] !== undefined && !values[key].trim()) {
       throw new Error(`--${key} cannot be empty.`);
     }
@@ -114,13 +116,13 @@ function validateScope(values) {
 export const help = `Claude review plugin for Codex
 
 review [--base REF] [--scope auto|working-tree|branch] [--wait|--background]
-adversarial-review [same options] [--focus-file PATH] [focus text...]
+adversarial-review [same options] [focus text...]
 setup [--enable-review-gate|--disable-review-gate]
 status [JOB_ID] [--wait] [--timeout-ms MS] [--poll-interval-ms MS] [--all]
 result [JOB_ID]
 cancel [JOB_ID]
 
-All commands accept --cwd PATH and --json (except help).
+All commands accept --cwd PATH (-C) and --json (except help).
 Both reviews accept --model MODEL (-m) and --effort low|medium|high|xhigh|max.
 Defaults: foreground, Claude's configured model/effort, auto scope.
 Auto reviews local changes when dirty, otherwise the branch against its base.

@@ -1,9 +1,14 @@
 import { spawn } from 'node:child_process';
-import { open, readFile, writeFile } from 'node:fs/promises';
+import { open, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { buildPrompt } from './claude.mjs';
 import { collectReview } from './git.mjs';
-import { currentSessionId, statusReport } from './status.mjs';
+import {
+  active,
+  currentSessionId,
+  sessionJobs,
+  statusReport,
+} from './status.mjs';
 import {
   createJob,
   jobPath,
@@ -16,11 +21,7 @@ import {
 export async function prepareJob(repo, root, options, target) {
   target ??= await collectReview(repo, { ...options, contextRoot: root });
   if (!target.context) return null;
-  const fileFocus = options['focus-file']
-    ? await readFile(options['focus-file'], 'utf8')
-    : '';
-  const focus = [fileFocus, options.focus].filter(Boolean).join('\n');
-  const prompt = await buildPrompt(options.command, target, focus);
+  const prompt = await buildPrompt(options.command, target, options.focus);
   return createJob(root, {
     repo,
     command: options.command,
@@ -66,12 +67,36 @@ export async function selectJob(root, id) {
   return resolveJob(root, id);
 }
 
+export async function selectResultJob(root, id) {
+  if (id) return selectJob(root, id);
+  const jobs = await sessionJobs(root);
+  const finished = jobs.find((job) => !active(job));
+  if (finished) return finished;
+  if (jobs.length)
+    throw new Error(
+      `Job ${jobs[0].id} is still ${jobs[0].state}. ` +
+        'Check $claude:status and try again once it finishes.',
+    );
+  throw new Error('No finished review jobs in this session.');
+}
+
+export async function selectCancelableJob(root, id) {
+  if (id) return selectJob(root, id);
+  const jobs = (await sessionJobs(root)).filter(active);
+  if (jobs.length === 1) return jobs[0];
+  if (jobs.length > 1)
+    throw new Error(
+      'Multiple review jobs are active. Pass a job ID to $claude:cancel.',
+    );
+  throw new Error('No active review jobs to cancel in this session.');
+}
+
 export async function status(root, id, options = {}) {
   return (await statusReport(root, { ...options, id })).text;
 }
 
 export async function cancelJob(root, id) {
-  const job = await selectJob(root, id);
+  const job = await selectCancelableJob(root, id);
   const state = await jobState(root, job);
   if (terminalStates.includes(state)) return `${job.id} is already ${state}.`;
   // Only the owning worker signals its child, avoiding persisted PID reuse.
@@ -85,7 +110,7 @@ export async function cancelJob(root, id) {
 }
 
 export async function result(root, id) {
-  const job = await selectJob(root, id);
+  const job = await selectResultJob(root, id);
   const state = await jobState(root, job);
   if (state !== 'completed') {
     return {

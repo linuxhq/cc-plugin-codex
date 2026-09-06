@@ -89,8 +89,9 @@ $claude:status JOB_ID --wait
 Waiting times out after four minutes without stopping the review. Use
 `--timeout-ms` to change the wait time.
 
-`result` returns the complete output verbatim. Without an ID, `result` and
-`cancel` select the latest job in this checkout, across sessions. Background
+`result` returns the complete output verbatim. Without an ID, it selects the
+most recently updated finished job in this session. `cancel` selects the sole
+active job in this session; if several are active, pass a job ID. Background
 jobs keep running after a Codex session ends; check status or results for
 completion. There are no background completion notifications.
 
@@ -120,11 +121,10 @@ in sections. Binary changes are noted, but their contents aren't reviewed.
 - `--model MODEL` (or `-m MODEL`): choose a model instead of Claude's default.
 - `--effort low|medium|high|xhigh|max`: choose the reasoning effort. Supported
   combinations depend on your Claude CLI and provider.
-- `--focus-file PATH`: supply focus text from a file. Adversarial review only.
 
 ```text
 $claude:review --background --model sonnet
-$claude:adversarial-review --wait --focus-file review-focus.md
+$claude:adversarial-review --wait check retry and rollback behavior
 ```
 
 ## Review automatically
@@ -240,8 +240,9 @@ node /path/to/cc-plugin-codex/plugins/claude/scripts/claude-review.mjs help
 Direct CLI calls run in the foreground by default. The execution-mode question
 is part of the Codex skills.
 
-For scripts, add `--cwd PATH` to choose a checkout and `--json` for
-machine-readable output. These options work with every command except `help`.
+For scripts, add `--cwd PATH` (or `-C PATH`) to choose a checkout and `--json`
+for machine-readable output. These options work with every command except
+`help`.
 
 ```sh
 node /path/to/claude-review.mjs status JOB_ID --wait --json

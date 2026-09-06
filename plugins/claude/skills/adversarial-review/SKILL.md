@@ -60,8 +60,6 @@ Argument handling:
 - Preserve the user's arguments exactly.
 - Do not strip `--wait` or `--background` yourself.
 - Do not weaken the adversarial framing or rewrite the user's focus text.
-- For multiline or shell-sensitive focus, write the exact text to a temporary
-  file and pass `--focus-file PATH`.
 - The bundled CLI parses `--wait` and `--background`; `--background` detaches
   the runtime worker.
 - If the user selected a mode in the question, append its flag to the supplied
