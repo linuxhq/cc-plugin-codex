@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "cc-plugin-codex",
+      "name": "claude",
       "source": {
         "source": "local",
-        "path": "./plugins/cc-plugin-codex"
+        "path": "./plugins/claude"
       },
       "policy": {
         "installation": "AVAILABLE",

@@ -88,7 +88,7 @@ export async function cancelJob(root, id) {
     return `${job.id} was interrupted; cancellation recorded.`;
   return [
     `Cancellation requested for ${job.id}.`,
-    `Use $claude-status ${job.id} to confirm.`,
+    `Use $claude:status ${job.id} to confirm.`,
   ].join('\n');
 }
 

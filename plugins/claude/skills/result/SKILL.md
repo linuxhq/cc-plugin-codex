@@ -1,5 +1,5 @@
 ---
-name: claude-result
+name: result
 description:
   Retrieve stored findings or failure details from a review started by this
   Claude review plugin.

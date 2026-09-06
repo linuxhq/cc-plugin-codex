@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { collectReview } from '../plugins/cc-plugin-codex/scripts/lib/git.mjs';
+import { collectReview } from '../plugins/claude/scripts/lib/git.mjs';
 import { fixture } from './helpers.mjs';
 
 test('captures all working layers, excluding ignored files', async (t) => {

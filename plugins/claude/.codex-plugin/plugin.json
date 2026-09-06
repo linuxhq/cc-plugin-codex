@@ -1,5 +1,5 @@
 {
-  "name": "cc-plugin-codex",
+  "name": "claude",
   "version": "0.1.0",
   "description": "Claude Code reviews and design challenges from Codex.",
   "author": {
@@ -15,9 +15,9 @@
     "category": "Productivity",
     "capabilities": [],
     "defaultPrompt": [
-      "$claude-review",
-      "$claude-adversarial-review",
-      "$claude-setup"
+      "$claude:review",
+      "$claude:adversarial-review",
+      "$claude:setup"
     ]
   }
 }

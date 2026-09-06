@@ -2,7 +2,7 @@
 
 Ask Claude Code to review your changes from inside Codex. Normal and adversarial
 reviews share a small runtime with background jobs, stored results, and
-cancellation. Every command starts with `$claude-`.
+cancellation. Every command starts with `$claude:`.
 
 ## Requirements
 
@@ -20,10 +20,10 @@ Add the GitHub marketplace and install the plugin:
 
 ```sh
 codex plugin marketplace add linuxhq/cc-plugin-codex
-codex plugin add cc-plugin-codex@linuxhq
+codex plugin add claude@linuxhq
 ```
 
-Start a new Codex session, then run `$claude-setup`.
+Start a new Codex session, then run `$claude:setup`.
 
 ## Install from this checkout
 
@@ -31,31 +31,30 @@ Run these commands from the repository root:
 
 ```sh
 codex plugin marketplace add .
-codex plugin add cc-plugin-codex@linuxhq
+codex plugin add claude@linuxhq
 ```
 
-Start a new Codex session, then run `$claude-setup`. Codex may display the
-plugin namespace alongside each skill in its picker; the skill names themselves
-are `claude-review`, `claude-setup`, and the other names listed below.
+Start a new Codex session, then run `$claude:setup`. The plugin name is
+`claude`; commands use `$claude:<skill-name>` as listed below.
 
 ## Commands
 
 | Command                      | Purpose                       |
 | ---------------------------- | ----------------------------- |
-| `$claude-review`             | Find bugs in Git changes      |
-| `$claude-adversarial-review` | Challenge design choices      |
-| `$claude-setup`              | Check CLI and authentication  |
-| `$claude-status [JOB_ID]`    | Show progress and recent jobs |
-| `$claude-result [JOB_ID]`    | Retrieve stored findings      |
-| `$claude-cancel [JOB_ID]`    | Request cancellation          |
+| `$claude:review`             | Find bugs in Git changes      |
+| `$claude:adversarial-review` | Challenge design choices      |
+| `$claude:setup`              | Check CLI and authentication  |
+| `$claude:status [JOB_ID]`    | Show progress and recent jobs |
+| `$claude:result [JOB_ID]`    | Retrieve stored findings      |
+| `$claude:cancel [JOB_ID]`    | Request cancellation          |
 
 ```text
-$claude-review
-$claude-review --base main
-$claude-review --background --model sonnet
-$claude-adversarial-review --base main examine retry and rollback behavior
-$claude-status
-$claude-result
+$claude:review
+$claude:review --base main
+$claude:review --background --model sonnet
+$claude:adversarial-review --base main examine retry and rollback behavior
+$claude:status
+$claude:result
 ```
 
 Reviews wait by default. Pass `--background` to return immediately with a job
@@ -123,13 +122,13 @@ calls.
 The CLI can also be used directly from any repository:
 
 ```sh
-node /path/to/cc-plugin-codex/plugins/cc-plugin-codex/scripts/claude-review.mjs help
+node /path/to/cc-plugin-codex/plugins/claude/scripts/claude-review.mjs help
 ```
 
-The distributable plugin lives in `plugins/cc-plugin-codex/`. Skills describe
-the commands; `scripts/lib/` contains focused modules for arguments, Git
-context, subprocesses, Claude invocation, job storage, and worker execution.
-Review prompts live in `prompts/`.
+The distributable plugin lives in `plugins/claude/`. Skills describe the
+commands; `scripts/lib/` contains focused modules for arguments, Git context,
+subprocesses, Claude invocation, job storage, and worker execution. Review
+prompts live in `prompts/`.
 
 ## References
 

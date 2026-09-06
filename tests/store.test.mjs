@@ -9,7 +9,7 @@ import {
   loadJob,
   saveJob,
   storeRoot,
-} from '../plugins/cc-plugin-codex/scripts/lib/store.mjs';
+} from '../plugins/claude/scripts/lib/store.mjs';
 import { fixture } from './helpers.mjs';
 
 test('heartbeats distinguish stale jobs from active jobs', async (t) => {

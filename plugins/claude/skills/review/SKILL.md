@@ -1,5 +1,5 @@
 ---
-name: claude-review
+name: review
 description:
   Run a read-only Claude Code review of local Git changes when the user asks for
   a Claude review or a second opinion from Claude.
@@ -25,11 +25,11 @@ omitted it.
 Without a base, review staged, unstaged, and nonignored untracked changes. With
 `--base`, review the branch from its merge base with that ref; tracked working
 changes must be clean. Do not commit, stash, or edit files to satisfy that
-check. Use `$claude-adversarial-review` for custom focus or design challenges.
+check. Use `$claude:adversarial-review` for custom focus or design challenges.
 
 For foreground execution, allow the command to keep running through the host's
 normal process polling mechanism and retrieve its result. For background
-execution, report the exact job ID and `$claude-result JOB_ID` command, then
+execution, report the exact job ID and `$claude:result JOB_ID` command, then
 return without waiting. The runtime owns background work; no Codex subagent is
 required.
 

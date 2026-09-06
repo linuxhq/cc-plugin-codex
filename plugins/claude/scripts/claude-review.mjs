@@ -30,7 +30,7 @@ async function main() {
     console.log(
       [
         `Review started: ${job.id}`,
-        `Use $claude-status ${job.id} or $claude-result ${job.id}.`,
+        `Use $claude:status ${job.id} or $claude:result ${job.id}.`,
       ].join('\n'),
     );
     return;

@@ -1,5 +1,5 @@
 ---
-name: claude-status
+name: status
 description:
   Show progress and recent jobs started by this Claude review plugin in the
   current Git repository.
@@ -15,4 +15,4 @@ node /absolute/plugin/root/scripts/claude-review.mjs status
 Pass the user's optional job ID as a separate argument. Without it, the command
 shows the ten latest jobs in this checkout, across Codex sessions. Display the
 reported states. `interrupted` means the worker's heartbeat is stale, not that
-Claude completed successfully. Use `$claude-result JOB_ID` to retrieve findings.
+Claude completed successfully. Use `$claude:result JOB_ID` to retrieve findings.

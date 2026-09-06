@@ -1,5 +1,5 @@
 ---
-name: claude-adversarial-review
+name: adversarial-review
 description:
   Ask Claude Code to challenge a change's design, assumptions, and failure modes
   when the user requests adversarial scrutiny or a focused Claude review.
@@ -23,7 +23,7 @@ pass `--focus-file` rather than interpolating it into shell code.
 
 Default to foreground execution and poll the host process until completion.
 `--background` starts a tracked worker: report its exact job ID and
-`$claude-result JOB_ID`, then return. No subagent is needed. Without `--base`,
+`$claude:result JOB_ID`, then return. No subagent is needed. Without `--base`,
 the target is staged, unstaged, and nonignored untracked changes. With a base,
 the target is the branch's merge-base diff and tracked working changes must be
 clean. Do not modify the checkout to satisfy that requirement.

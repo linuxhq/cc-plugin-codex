@@ -1,5 +1,5 @@
 ---
-name: claude-setup
+name: setup
 description:
   Check whether the local Claude Code executable and authentication are ready
   for this Codex review plugin.
