@@ -95,7 +95,7 @@ assert.equal(
   end.command,
   'node "${PLUGIN_ROOT}/scripts/session-lifecycle-hook.mjs" SessionEnd',
 );
-assert.equal(end.timeout, 5);
+assert.equal(end.timeout, 3);
 assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Use default hook discovery');
 console.log(
   `Validated plugin, marketplace, and ${names.length} command skills.`,

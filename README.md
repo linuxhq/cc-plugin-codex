@@ -140,7 +140,8 @@ partial edits from write rescue. Inspect the working tree before continuing.
 Background jobs continue after the launching Codex turn ends. When the Codex
 session ends, the SessionEnd hook removes its finished job records and cancels
 active jobs. Workers remove their records after stopping. Other sessions and the
-checkout's gate setting are preserved.
+checkout's gate setting are preserved. The hook uses Codex's maximum SessionEnd
+timeout of 3 seconds, rather than upstream's 5 seconds.
 
 ## Automatic review gate
 
