@@ -20,7 +20,7 @@ Add the GitHub marketplace and install the plugin:
 
 ```sh
 codex plugin marketplace add linuxhq/cc-plugin-codex
-codex plugin add claude@claude-review
+codex plugin add claude@cc-plugin-codex
 ```
 
 Start a new Codex session, then run `$claude-setup`.
@@ -31,7 +31,7 @@ Run these commands from the repository root:
 
 ```sh
 codex plugin marketplace add .
-codex plugin add claude@claude-review
+codex plugin add claude@cc-plugin-codex
 ```
 
 Start a new Codex session, then run `$claude-setup`. Codex may display the

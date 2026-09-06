@@ -1,7 +1,7 @@
 {
-  "name": "claude-review",
+  "name": "cc-plugin-codex",
   "interface": {
-    "displayName": "Claude Review"
+    "displayName": "CC Plugin Codex"
   },
   "plugins": [
     {
