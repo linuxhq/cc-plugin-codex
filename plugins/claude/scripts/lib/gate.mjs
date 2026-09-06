@@ -6,13 +6,13 @@ import { storeRoot } from './store.mjs';
 import { executeJob } from './worker.mjs';
 
 const recovery =
-  'Run $claude:review for a manual review, or use ' +
-  "$claude:setup --disable-review-gate to disable this checkout's gate.";
+  'Run $claude:review for a manual review.\n' +
+  "Run $claude:setup --disable-review-gate to disable this checkout's gate.";
 
 export function gateFailure(message) {
   return {
     decision: 'block',
-    reason: `Claude automatic review did not pass: ${message}\n${recovery}`,
+    reason: `Claude automatic review did not pass:\n${message}\n${recovery}`,
   };
 }
 
@@ -82,7 +82,7 @@ async function reviewTurn(repo, root, target) {
   if (completed.state !== 'completed')
     return gateFailure(
       `${completed.state}: ${completed.error || 'Review did not complete.'}` +
-        ` Review job: ${job.id}`,
+        `\nReview job: ${job.id}`,
     );
   const decision = parseGateOutput(completed.output);
   if (decision.reason) decision.reason += `\nReview job: ${job.id}`;

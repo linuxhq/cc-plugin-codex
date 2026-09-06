@@ -58,28 +58,40 @@ $claude:status
 $claude:result
 ```
 
-Reviews wait by default. Pass `--background` to return immediately with a job
-ID, or `--wait` to explicitly wait. Both review commands accept `--model MODEL`
-and `--effort low|medium|high|xhigh|max`. Omitted model and effort options are
-left to Claude; model and effort compatibility is determined by the installed
-CLI and provider. Focus text is supported only by adversarial review, either as
-positional arguments or with `--focus-file PATH`.
+### Review arguments
 
-`--scope auto` is the default: `--base REF` selects branch review; otherwise
-review the working tree. `--scope branch` requires `--base`;
-`--scope working-tree` rejects it. Branch reviews compare the merge base to HEAD
-and require clean tracked files so Claude's file reads match the diff.
-Working-tree reviews include separate staged and unstaged patches plus
-nonignored untracked files, even before the first commit. Ignored files are not
-included in the supplied patch. Binary changes are identified but their contents
-are not reviewed. Context over 1 MiB is rejected before calling Claude; split
-large changes into smaller reviews.
+Both review commands accept:
 
-Without an ID, result and cancel select the latest job in this checkout, across
-Codex sessions. Use an explicit ID when multiple sessions are active. Separate
-Git worktrees have separate job stores. Background reviews snapshot the patch at
-launch; supporting file reads use the live checkout. Avoid changing the checkout
-during a review when consistent surrounding context matters.
+- `--wait`: wait for the result (the default).
+- `--background`: return immediately with a job ID. Cannot be combined with
+  `--wait`.
+- `--base REF`: review the branch from its merge base with this ref to HEAD.
+  Tracked working files must be clean.
+- `--scope auto|working-tree|branch`: default to `auto`, which selects branch
+  review when `--base` is present and working-tree review otherwise. Explicit
+  `branch` requires `--base`; explicit `working-tree` rejects it.
+- `--model MODEL`: override Claude's configured model.
+- `--effort low|medium|high|xhigh|max`: override Claude's configured effort.
+  Supported model and effort combinations depend on the installed CLI and
+  provider.
+
+Only `$claude:adversarial-review` accepts custom focus text, either as
+positional arguments or through `--focus-file PATH`.
+
+### Review scope and jobs
+
+- Working-tree reviews include staged and unstaged patches plus nonignored
+  untracked files, even before the first commit. Ignored files are excluded.
+- Binary changes are identified, but their contents are not reviewed.
+- Context over 1 MiB is rejected before calling Claude. Split large changes into
+  smaller reviews.
+- Without a job ID, `result` and `cancel` select the latest job in this checkout
+  across Codex sessions. `status` lists the ten latest jobs. Use an explicit ID
+  when multiple sessions are active.
+- Separate Git worktrees have separate job stores.
+- Background reviews snapshot the patch at launch, but supporting file reads use
+  the live checkout. Avoid changing the checkout during a review when consistent
+  surrounding context matters.
 
 ## Automatic review gate
 
@@ -95,11 +107,15 @@ The gate is disabled by default. Setup without flags reports its state and
 checks Claude authentication. Enabling checks authentication before saving the
 setting; disabling works even when Claude is unavailable.
 
-Use a Codex version with [UserPromptSubmit and Stop hooks][codex-hooks]. After
-installing or updating the plugin, start a new session and review and trust both
-hooks in `/hooks`. Codex skips untrusted hooks. Enabling the gate does not
-change Codex's hook trust or override a global or administrator setting that
-disables hooks.
+To activate the gate:
+
+1. Use a Codex version with [UserPromptSubmit and Stop hooks][codex-hooks].
+2. Start a new session after installing or updating the plugin.
+3. Review and trust both hooks in `/hooks`.
+4. Run `$claude:setup --enable-review-gate` in the checkout.
+
+Codex skips untrusted hooks. Enabling the gate does not change hook trust or
+override a global or administrator setting that disables hooks.
 
 At UserPromptSubmit, the hook snapshots the checkout's file contents for the
 session and turn. At Stop, it compares the current contents with that snapshot.
@@ -115,13 +131,17 @@ instead of reviewing older changes. Concurrent external edits during the same
 turn are included: the comparison identifies when contents changed, not who
 edited them. Ignored untracked files are excluded.
 
-An `ALLOW` decision lets Codex finish. `BLOCK` returns a short message saying
-issues still need fixes before ending the session, followed by the reviewer's
-first-line summary and the review job ID. Use `$claude:result` with that ID to
-read the full findings. Failed, cancelled, and malformed reviews also return
-feedback instead of counting as a pass. The hook skips a continuation already
-triggered by a Stop hook to prevent endless review loops; run `$claude:review`
-to verify the fixes. It skips non-Git directories.
+Review outcomes:
+
+- `ALLOW` lets Codex finish.
+- `BLOCK` reports that issues still need fixes, followed by the reviewer's
+  first-line summary and job ID. Use `$claude:result JOB_ID` for full findings.
+- Failed, cancelled, and malformed reviews return feedback instead of counting
+  as a pass. Failure messages separate the error, job ID, and recovery commands
+  onto individual lines.
+- A continuation triggered by a Stop hook skips automatic review to prevent
+  endless loops. Run `$claude:review` to verify fixes.
+- Non-Git directories skip review.
 
 Automatic runs consume Claude account usage, including when Claude decides a
 turn needs no further review. They use Claude's configured model and effort,
