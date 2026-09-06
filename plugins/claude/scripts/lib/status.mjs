@@ -16,6 +16,13 @@ export async function jobSnapshot(root, job) {
   const start = Date.parse(job.startedAt || job.createdAt);
   return {
     ...data,
+    ...(job.write && ['failed', 'cancelled', 'interrupted'].includes(state)
+      ? {
+          warning:
+            'Write job may have left partial edits. Inspect the working tree ' +
+            'and recovery record before continuing.',
+        }
+      : {}),
     state,
     status: state,
     progress,
@@ -82,10 +89,16 @@ async function singleStatus(root, options) {
   }
   const waitTimedOut = Boolean(options.wait && active(job));
   const text = formatProgress(job, job.state, job.progress, true);
+  const continuation = job.claudeSessionId
+    ? `\nContinue: claude --resume ${job.claudeSessionId}`
+    : '';
   return {
     payload: { job, ...(options.wait ? { waitTimedOut, timeoutMs } : {}) },
     text:
-      text + (waitTimedOut ? '\nWait timed out; the job is still active.' : ''),
+      text +
+      continuation +
+      (job.warning ? `\nWarning: ${job.warning}` : '') +
+      (waitTimedOut ? '\nWait timed out; the job is still active.' : ''),
   };
 }
 
@@ -108,7 +121,7 @@ function renderTable(jobs, gate) {
       job.state,
       active(job) ? job.progress.phase || job.state : job.state,
       `${Math.floor(job.elapsedMs / 1000)}s`,
-      job.progress.summary || job.error,
+      job.warning || job.progress.summary || job.error,
       gate ? 'enabled' : 'disabled',
       `$claude:status ${job.id}; $claude:${followup} ${job.id}`,
     ];

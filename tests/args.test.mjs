@@ -28,7 +28,7 @@ for (const args of [
   ['review', 'custom focus'],
   ['review', '--focus-file', 'focus.txt'],
   ['adversarial-review', '--focus-file', 'focus.txt'],
-  ['review', '--effort', 'high'],
+  ['review', '--effort', 'minimal'],
   ['review', '--unknown'],
   ['review', '--base', ''],
   ['review', '--model', '  '],

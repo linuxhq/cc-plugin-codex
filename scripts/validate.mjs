@@ -24,7 +24,16 @@ assert.equal(marketplace.plugins[0].policy.authentication, 'ON_INSTALL');
 
 const skillRoot = new URL('plugins/claude/skills/', root);
 const names = await readdir(skillRoot);
-assert.equal(names.length, 6);
+assert.deepEqual(names.sort(), [
+  'adversarial-review',
+  'cancel',
+  'rescue',
+  'result',
+  'review',
+  'setup',
+  'status',
+  'transfer',
+]);
 for (const name of names) {
   assert.match(name, /^[a-z-]+$/);
   const text = await readFile(new URL(`${name}/SKILL.md`, skillRoot), 'utf8');

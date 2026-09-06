@@ -1,7 +1,7 @@
 {
   "name": "claude",
-  "version": "0.1.0",
-  "description": "Claude Code reviews and design challenges from Codex.",
+  "version": "0.1.0+codex.20260906192701",
+  "description": "Claude reviews, delegated fixes, and session handoffs from Codex.",
   "author": {
     "name": "linuxhq"
   },
@@ -9,15 +9,11 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Claude Review",
-    "shortDescription": "Ask Claude to review your code from Codex.",
-    "longDescription": "Run and manage Claude reviews of Git changes.",
+    "shortDescription": "Review, delegate, and continue work with Claude.",
+    "longDescription": "Run Claude reviews, delegate investigations and fixes, and hand off Codex context to persistent Claude sessions.",
     "developerName": "linuxhq",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": [
-      "$claude:review",
-      "$claude:adversarial-review",
-      "$claude:setup"
-    ]
+    "defaultPrompt": ["$claude:review", "$claude:rescue", "$claude:transfer"]
   }
 }

@@ -2,7 +2,7 @@
 name: setup
 description: >-
   Check Claude setup and toggle reviews. Args: --enable-review-gate,
-  --disable-review-gate.
+  --disable-review-gate, --install.
 ---
 
 Resolve the plugin root two directories above this skill directory. Run from the
@@ -20,8 +20,13 @@ unauthenticated. Report both the saved setting and readiness guidance. The
 setting persists per Git checkout outside the repository.
 
 Report the result. Setup does not start a paid review. If the executable is
-missing, point to `https://code.claude.com/docs/en/setup`. If authentication is
-missing, tell the user to run `claude auth login` in their terminal.
+missing, offer `setup --install`, which downloads a pinned native Claude binary,
+verifies its bundled SHA-256 checksum, and runs its install command, or point to
+`https://code.claude.com/docs/en/setup`. Run the installer only when the user
+requests installation; an explicit `--install` already authorizes it. Setup
+never reinstalls an existing executable or treats missing authentication as a
+reason to install. If authentication is missing, tell the user to run
+`claude auth login` in their terminal.
 
 The bundled Stop hook requires Codex hook support and user trust. When enabling,
 explain that the user must trust it in `/hooks` and start a new session after

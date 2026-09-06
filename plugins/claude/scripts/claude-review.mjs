@@ -14,6 +14,7 @@ import {
 import { storeRoot } from './lib/store.mjs';
 import { executeJob } from './lib/worker.mjs';
 import { jobSnapshot, statusReport } from './lib/status.mjs';
+import { resumeCandidate } from './lib/tasks.mjs';
 
 function emit(payload, text, json) {
   console.log(json ? JSON.stringify(payload) : text);
@@ -25,6 +26,16 @@ async function main(options) {
   if (options.command === 'setup') return showSetup(options);
   const repo = await repositoryRoot(process.cwd());
   const root = storeRoot(repo);
+  if (options.command === 'rescue-resume-candidate') {
+    const candidate = await resumeCandidate(root);
+    return emit(
+      candidate,
+      candidate.available
+        ? `Resumable task: ${candidate.jobId}`
+        : 'No resumable task in this session.',
+      options.json,
+    );
+  }
   if (options.command === 'status') {
     const report = await statusReport(root, { ...options, repo });
     return emit(report.payload, report.text, options.json);
@@ -41,12 +52,12 @@ async function main(options) {
   if (options.background) {
     await launchBackground(root, job);
     const text =
-      `Review started: ${job.id}\n` +
+      `${job.command} started: ${job.id}\n` +
       `Use $claude:status ${job.id} or $claude:result ${job.id}.`;
     return emit({ job: await jobSnapshot(root, job) }, text, options.json);
   }
-  console.error(`Review started: ${job.id}`);
-  const completed = await executeJob(root, job.id);
+  console.error(`${job.command} started: ${job.id}`);
+  const completed = await executeJob(root, job.id, { prompt: job.prompt });
   await showResult(root, job.id, options.json);
   if (completed.state !== 'completed') process.exitCode = 1;
 }

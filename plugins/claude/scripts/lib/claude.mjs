@@ -11,6 +11,7 @@ import {
 } from './adversarial.mjs';
 import { renderNativeReviewResult } from './render.mjs';
 import { reviewStream } from './stream.mjs';
+import { persistentCommands, validSessionId } from './tasks.mjs';
 
 export async function buildPrompt(command, target, focus = '') {
   const instructions = await readFile(
@@ -44,6 +45,8 @@ export async function buildPrompt(command, target, focus = '') {
 }
 
 export function claudeArgs(job) {
+  if (job.command === 'transfer' || (job.command === 'rescue' && job.write))
+    return taskArgs(job);
   const args = [
     '--print',
     '--output-format',
@@ -75,7 +78,6 @@ export function claudeArgs(job) {
     '--settings',
     '{"disableAllHooks":true}',
     '--disable-slash-commands',
-    '--no-session-persistence',
     '--system-prompt',
     job.prompt.system +
       '\nUse the repository inspect tool for file listing, reading, Git ' +
@@ -87,6 +89,49 @@ export function claudeArgs(job) {
   if (job.command === 'stop-review-gate')
     args.push('--json-schema', JSON.stringify(gateSchema));
   if (job.model) args.push('--model', job.model);
+  if (job.effort) args.push('--effort', job.effort);
+  addPersistence(args, job);
+  return args;
+}
+
+function addPersistence(args, job) {
+  if (!persistentCommands.includes(job.command)) {
+    args.push('--no-session-persistence');
+  } else if (job.resumeSessionId) {
+    args.push('--resume', job.resumeSessionId, '--fork-session');
+  } else {
+    args.push('--session-id', job.requestedSessionId);
+  }
+}
+
+function taskArgs(job) {
+  const tools =
+    job.command === 'transfer' ? '' : 'Read,Glob,Grep,Edit,Write,Bash';
+  const args = [
+    '--print',
+    '--output-format',
+    'stream-json',
+    '--verbose',
+    '--include-partial-messages',
+    '--tools',
+    tools,
+    '--permission-mode',
+    'dontAsk',
+    '--strict-mcp-config',
+    '--mcp-config',
+    '{"mcpServers":{}}',
+    '--setting-sources',
+    'user',
+    '--settings',
+    '{"disableAllHooks":true}',
+    '--disable-slash-commands',
+    '--append-system-prompt',
+    job.prompt.system,
+  ];
+  if (tools) args.push('--allowedTools', tools);
+  if (job.model) args.push('--model', job.model);
+  if (job.effort) args.push('--effort', job.effort);
+  addPersistence(args, job);
   return args;
 }
 
@@ -96,6 +141,8 @@ export async function reviewWithClaude(job, signal, onProgress) {
   return withInspectionAudit(job, async (request) => {
     const output = await executeReview(request, signal, onProgress);
     job.metrics = request.metrics;
+    if (request.warning) job.warning = request.warning;
+    if (request.claudeSessionId) job.claudeSessionId = request.claudeSessionId;
     return output;
   });
 }
@@ -108,6 +155,7 @@ async function executeReview(job, signal, onProgress) {
     timeout: job.command === 'stop-review-gate' ? gateReviewTimeout : null,
     signal,
     captureStdout: false,
+    supervise: Boolean(job.write),
     onStdout: stream.write,
   });
   const raw = stream.finish();
@@ -118,6 +166,14 @@ async function executeReview(job, signal, onProgress) {
     ),
   });
   const usage = JSON.parse(raw);
+  if (persistentCommands.includes(job.command)) {
+    if (validSessionId(usage.session_id))
+      job.claudeSessionId = usage.session_id;
+    else
+      job.warning =
+        'Claude returned no valid resumable session ID; output is preserved, ' +
+        'but this job cannot be resumed.';
+  }
   job.metrics = {
     durationMs: usage.duration_ms,
     costUsd: usage.total_cost_usd,

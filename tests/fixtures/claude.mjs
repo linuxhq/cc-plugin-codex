@@ -1,5 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
+import { randomUUID } from 'node:crypto';
 
 const args = process.argv.slice(2);
 const mode = process.env.FAKE_CLAUDE_MODE;
@@ -34,7 +35,7 @@ if (args[0] === '--version') {
     JSON.stringify({ args, input, cwd: process.cwd(), pid: process.pid }),
   );
   const mcp = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
-  const audit = mcp.mcpServers.repository.args[2];
+  const audit = mcp.mcpServers.repository?.args[2];
   if (audit && mode !== 'no-inspection')
     await writeFile(
       audit,
@@ -70,6 +71,12 @@ if (args[0] === '--version') {
     console.log(
       JSON.stringify({
         type: 'result',
+        session_id:
+          mode === 'missing-session'
+            ? undefined
+            : args.includes('--session-id')
+              ? args[args.indexOf('--session-id') + 1]
+              : randomUUID(),
         duration_ms: 123,
         total_cost_usd: 0.01,
         usage: { input_tokens: 10, output_tokens: 5 },

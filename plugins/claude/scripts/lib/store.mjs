@@ -29,7 +29,10 @@ export function jobPath(root, id, name = 'job.json') {
 export async function saveJob(root, job) {
   const path = jobPath(root, job.id);
   const temporary = `${path}.${randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(job, null, 2)}\n`, {
+  const data = ['rescue', 'transfer'].includes(job.command)
+    ? { ...job, prompt: undefined }
+    : job;
+  await writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, {
     mode: 0o600,
   });
   await rename(temporary, path);

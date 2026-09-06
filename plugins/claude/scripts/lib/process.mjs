@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 // Use argument arrays so repository content never enters a shell.
@@ -9,12 +10,7 @@ export function runProcess(command, args, options = {}) {
     maxBytes = 4 * 1024 * 1024,
   } = options;
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: process.platform !== 'win32',
-    });
+    const child = spawnProcess(command, args, options);
     let stdout = '';
     let stderr = '';
     let size = 0;
@@ -73,4 +69,26 @@ function terminate(child, signal) {
   } catch (error) {
     if (error.code !== 'ESRCH') throw error;
   }
+}
+
+function spawnProcess(command, args, options) {
+  const supervised = options.supervise && process.platform !== 'win32';
+  return spawn(
+    supervised ? process.execPath : command,
+    supervised
+      ? [
+          fileURLToPath(new URL('../process-supervisor.mjs', import.meta.url)),
+          command,
+          ...args,
+        ]
+      : args,
+    {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: supervised
+        ? ['pipe', 'pipe', 'pipe', 'ipc']
+        : ['pipe', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    },
+  );
 }

@@ -1,9 +1,12 @@
+import { gateSnapshot } from './gate-snapshot.mjs';
 import { renderGateResult } from './gate-output.mjs';
+import { randomUUID } from 'node:crypto';
+import { persistentCommands, prepareTask } from './tasks.mjs';
 import { spawn } from 'node:child_process';
 import { open, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { buildPrompt } from './claude.mjs';
-import { collectReview } from './git.mjs';
+import { collectReview, git } from './git.mjs';
 import {
   active,
   currentSessionId,
@@ -20,13 +23,32 @@ import {
 } from './store.mjs';
 
 export async function prepareJob(repo, root, options, target) {
-  target ??= await collectReview(repo, options);
-  const prompt = await buildPrompt(options.command, target, options.focus);
+  let reviewSnapshot =
+    options.command === 'adversarial-review'
+      ? await gateSnapshot(repo)
+      : undefined;
+  const persistent = persistentCommands.includes(options.command);
+  const task = persistent ? await prepareTask(root, options) : null;
+  target ??= persistent
+    ? { scope: options.command }
+    : await collectReview(repo, options);
+  reviewSnapshot = await scopedSnapshot(repo, target, reviewSnapshot);
+  const prompt =
+    task?.prompt || (await buildPrompt(options.command, target, options.focus));
   const job = await createJob(root, {
     repo,
+    ...(options.command === 'adversarial-review' ? { reviewSnapshot } : {}),
     command: options.command,
     sessionId: options.sessionId || currentSessionId(),
     model: options.model,
+    effort: options.effort,
+    ...(persistent
+      ? {
+          write: Boolean(options.write),
+          resumeSessionId: task.resumeSessionId,
+          requestedSessionId: task.resumeSessionId ? undefined : randomUUID(),
+        }
+      : {}),
     target: {
       scope: target.scope,
       base: target.base,
@@ -44,12 +66,14 @@ export async function launchBackground(root, job) {
     const child = spawn(process.execPath, [worker, root, job.id], {
       cwd: job.repo,
       detached: true,
-      stdio: ['ignore', log.fd, log.fd],
+      stdio: ['pipe', log.fd, log.fd],
     });
     await new Promise((resolve, reject) => {
       child.once('error', reject);
       child.once('spawn', resolve);
     });
+    child.stdin.on('error', () => {});
+    child.stdin.end(JSON.stringify(job.prompt));
     child.unref();
   } catch (error) {
     await saveJob(root, { ...job, state: 'failed', error: error.message });
@@ -121,7 +145,12 @@ export async function result(root, id) {
   const state = await jobState(root, job);
   if (state !== 'completed') {
     return {
-      text: `${job.id}: ${state}${job.error ? `\n${job.error}` : ''}`,
+      text:
+        `${job.id}: ${state}${job.error ? `\n${job.error}` : ''}` +
+        (job.write
+          ? '\nWrite job may have left partial edits. ' +
+            'Inspect the working tree and recovery record before continuing.'
+          : ''),
       failed: ['failed', 'cancelled', 'interrupted'].includes(state),
     };
   }
@@ -129,5 +158,25 @@ export async function result(root, id) {
     job.command === 'stop-review-gate'
       ? renderGateResult(job.output)
       : job.output;
-  return { text: `${output}\n\nReview job: ${job.id}`, failed: false };
+  const continuation = job.claudeSessionId
+    ? `\nClaude session: ${job.claudeSessionId}\n` +
+      `Continue: claude --resume ${job.claudeSessionId}`
+    : '';
+  return {
+    text:
+      output +
+      (job.warning ? `\n\nWarning: ${job.warning}` : '') +
+      `\n\nReview job: ${job.id}${continuation}`,
+    failed: false,
+  };
+}
+
+async function scopedSnapshot(repo, target, reviewSnapshot) {
+  if (
+    target.scope === 'branch' &&
+    reviewSnapshot &&
+    (await git(repo, ['status', '--porcelain=v1', '--untracked-files=all']))
+  )
+    reviewSnapshot = null;
+  return reviewSnapshot;
 }

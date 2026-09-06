@@ -6,6 +6,8 @@ Source: https://github.com/openai/codex-plugin-cc
 Revision: db52e28f4d9ded852ab3942cea316258ae4ef346
 
 Adapted files:
+- skills/rescue/SKILL.md (workflow adapted from upstream commands/rescue.md)
+- skills/transfer/SKILL.md (handoff workflow from upstream commands/transfer.md)
 - skills/status/SKILL.md (upstream commands/status.md)
 - skills/result/SKILL.md (upstream commands/result.md)
 - scripts/lib/status.mjs (status conventions from upstream runtime)

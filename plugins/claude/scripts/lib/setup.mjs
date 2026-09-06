@@ -2,6 +2,7 @@ import { checkSetup } from './claude.mjs';
 import { readGateConfig, writeGateConfig } from './gate-config.mjs';
 import { repositoryRoot } from './git.mjs';
 import { storeRoot } from './store.mjs';
+import { installClaude } from './install.mjs';
 
 export async function setup(options) {
   const enable = options['enable-review-gate'];
@@ -14,8 +15,16 @@ export async function setup(options) {
   }
   const root = repo ? storeRoot(repo) : null;
   if (enable || disable) await writeGateConfig(root, Boolean(enable));
-  const { ready, readiness } = await checkReadiness();
+  let readinessResult = await checkReadiness();
+  if (options.install && readinessResult.missing)
+    readinessResult = await installAndCheck();
+  const { ready, readiness, missing = false } = readinessResult;
   const gate = root ? await readGateConfig(root) : null;
+  const message = setupMessage(readiness, gate, repo);
+  return { ready, missing, workspaceRoot: repo, gate, message };
+}
+
+function setupMessage(readiness, gate, repo) {
   const message = [
     readiness.trimEnd(),
     gate
@@ -29,7 +38,32 @@ export async function setup(options) {
         ]
       : []),
   ].join('\n');
-  return { ready, workspaceRoot: repo, gate, message };
+  return message;
+}
+
+async function installAndCheck() {
+  try {
+    const output = await installClaude();
+    const checked = await checkReadiness();
+    return {
+      ...checked,
+      readiness: [
+        output,
+        checked.readiness,
+        checked.missing
+          ? 'Add ~/.local/bin to PATH, restart your terminal, then run setup.'
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
+    };
+  } catch (error) {
+    return {
+      ready: false,
+      missing: true,
+      readiness: `Claude installation failed: ${error.message}`,
+    };
+  }
 }
 
 async function checkReadiness() {
@@ -38,9 +72,11 @@ async function checkReadiness() {
   } catch (error) {
     return {
       ready: false,
+      missing: error.code === 'ENOENT',
       readiness:
         error.code === 'ENOENT'
-          ? 'Claude is unavailable. Install the claude CLI and retry setup.'
+          ? 'Claude is unavailable. Run $claude:setup --install to install ' +
+            'the native CLI, or see https://code.claude.com/docs/en/setup.'
           : error.message,
     };
   }
