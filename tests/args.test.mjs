@@ -38,8 +38,18 @@ for (const args of [
   ['review', '--model', '  '],
   ['status', '--all'],
   ['setup', 'extra'],
+  ['setup', '--enable-review-gate', '--disable-review-gate'],
+  ['setup', '--enable-review-gate', 'extra'],
+  ['setup', '--unknown'],
 ]) {
   test(`rejects invalid arguments: ${args.join(' ')}`, () => {
     assert.throws(() => parseCommand(args));
   });
 }
+
+test('setup accepts either review gate toggle', () => {
+  assert.deepEqual(parseCommand(['setup']), { command: 'setup' });
+  for (const flag of ['enable-review-gate', 'disable-review-gate']) {
+    assert.equal(parseCommand(['setup', `--${flag}`])[flag], true);
+  }
+});

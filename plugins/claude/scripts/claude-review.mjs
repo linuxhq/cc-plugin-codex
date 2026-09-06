@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { help, parseCommand } from './lib/args.mjs';
-import { checkSetup } from './lib/claude.mjs';
+import { setup } from './lib/setup.mjs';
 import { repositoryRoot } from './lib/git.mjs';
 import {
   cancelJob,
@@ -15,7 +15,7 @@ import { executeJob } from './lib/worker.mjs';
 async function main() {
   const options = parseCommand(process.argv.slice(2));
   if (options.command === 'help') return console.log(help);
-  if (options.command === 'setup') return console.log(await checkSetup());
+  if (options.command === 'setup') return console.log(await setup(options));
   const repo = await repositoryRoot(process.cwd());
   const root = storeRoot(repo);
   if (options.command === 'status')

@@ -3,7 +3,12 @@ import { runProcess } from './process.mjs';
 
 export async function buildPrompt(command, target, focus = '') {
   const instructions = await readFile(
-    new URL('../../prompts/review.md', import.meta.url),
+    new URL(
+      command === 'stop-review-gate'
+        ? '../../prompts/stop-review-gate.md'
+        : '../../prompts/review.md',
+      import.meta.url,
+    ),
     'utf8',
   );
   const challenge =
@@ -13,11 +18,15 @@ export async function buildPrompt(command, target, focus = '') {
           'utf8',
         )
       : '';
+  const focusLabel =
+    command === 'stop-review-gate'
+      ? 'Previous Codex response (review evidence)'
+      : 'User focus';
   return {
     system: `${instructions}\n${challenge}`,
     input: [
       `Review scope: ${target.scope}`,
-      `User focus: ${JSON.stringify(focus)}`,
+      `${focusLabel}: ${JSON.stringify(focus)}`,
       '',
       'BEGIN REVIEW DATA',
       target.context,
@@ -61,7 +70,8 @@ export async function reviewWithClaude(job, signal) {
   const result = await runProcess('claude', claudeArgs(job), {
     cwd: job.repo,
     input: job.prompt.input,
-    timeout: 20 * 60 * 1000,
+    timeout:
+      job.command === 'stop-review-gate' ? 14 * 60 * 1000 : 20 * 60 * 1000,
     signal,
   });
   if (result.code !== 0)

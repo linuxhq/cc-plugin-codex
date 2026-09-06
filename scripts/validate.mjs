@@ -36,9 +36,21 @@ for (const path of [
   'scripts/worker.mjs',
   'prompts/review.md',
   'prompts/adversarial-review.md',
+  'prompts/stop-review-gate.md',
+  'scripts/stop-review-gate-hook.mjs',
+  'hooks/hooks.json',
 ]) {
   await access(new URL(join('plugins/claude', path), root));
 }
+const hooks = await json('plugins/claude/hooks/hooks.json');
+const stop = hooks.hooks.Stop[0].hooks[0];
+assert.equal(stop.type, 'command');
+assert.equal(
+  stop.command,
+  'node "${PLUGIN_ROOT}/scripts/stop-review-gate-hook.mjs"',
+);
+assert.equal(stop.timeout, 900);
+assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Use default hook discovery');
 console.log(
   `Validated plugin, marketplace, and ${names.length} command skills.`,
 );

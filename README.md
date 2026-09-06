@@ -2,7 +2,8 @@
 
 Ask Claude Code to review your changes from inside Codex. Normal and adversarial
 reviews share a small runtime with background jobs, stored results, and
-cancellation. Every command starts with `$claude:`.
+cancellation. An optional automatic review gate asks Claude to check a turn
+before Codex finishes. Every command starts with `$claude:`.
 
 ## Requirements
 
@@ -39,14 +40,14 @@ Start a new Codex session, then run `$claude:setup`. The plugin name is
 
 ## Commands
 
-| Command                      | Purpose                       |
-| ---------------------------- | ----------------------------- |
-| `$claude:review`             | Find bugs in Git changes      |
-| `$claude:adversarial-review` | Challenge design choices      |
-| `$claude:setup`              | Check CLI and authentication  |
-| `$claude:status [JOB_ID]`    | Show progress and recent jobs |
-| `$claude:result [JOB_ID]`    | Retrieve stored findings      |
-| `$claude:cancel [JOB_ID]`    | Request cancellation          |
+| Command                      | Purpose                        |
+| ---------------------------- | ------------------------------ |
+| `$claude:review`             | Find bugs in Git changes       |
+| `$claude:adversarial-review` | Challenge design choices       |
+| `$claude:setup`              | Check readiness and gate state |
+| `$claude:status [JOB_ID]`    | Show progress and recent jobs  |
+| `$claude:result [JOB_ID]`    | Retrieve stored findings       |
+| `$claude:cancel [JOB_ID]`    | Request cancellation           |
 
 ```text
 $claude:review
@@ -80,6 +81,50 @@ Git worktrees have separate job stores. Background reviews snapshot the patch at
 launch; supporting file reads use the live checkout. Avoid changing the checkout
 during a review when consistent surrounding context matters.
 
+## Automatic review gate
+
+Like OpenAI's Codex plugin for Claude Code, this plugin bundles a `Stop` hook
+with an opt-in setting for each Git checkout:
+
+```text
+$claude:setup --enable-review-gate
+$claude:setup --disable-review-gate
+```
+
+The gate is disabled by default. Setup without flags reports its state and
+checks Claude authentication. Enabling checks authentication before saving the
+setting; disabling works even when Claude is unavailable.
+
+Use a Codex version with [plugin-bundled Stop hooks][codex-hooks] (the hook
+contract was checked against Codex CLI 0.153.1). After installing or updating
+the plugin, start a new session and review and trust its Stop hook in `/hooks`.
+Codex skips untrusted hooks. Enabling the gate does not change Codex's hook
+trust or override a global or administrator setting that disables hooks.
+
+At Stop, Claude receives the previous Codex response and the current Git patch,
+and can inspect surrounding files with read-only tools. Its instructions limit
+findings to the previous turn's code work and allow status, setup, questions,
+and reporting-only turns. Turn attribution is model-based: the patch can contain
+older edits, and committed changes are not included in the working-tree patch.
+This is a review aid, not proof that every edit was checked.
+
+An `ALLOW` decision lets Codex finish. `BLOCK` tells Codex to evaluate each
+finding against the code, automatically fix the issues it agrees with within the
+authorized task scope, and run relevant checks before finishing. It must explain
+rejected findings with evidence, and report fixes, validation, and anything
+unresolved. It should not stop at presenting the review or ask whether to fix
+accepted findings. Failed, cancelled, and malformed reviews also return feedback
+instead of counting as a pass. The hook skips a continuation already triggered
+by a Stop hook to prevent endless review loops; run `$claude:review` to verify
+the fixes. It skips non-Git directories.
+
+Automatic runs consume Claude account usage, including when Claude decides a
+turn needs no further review. They use Claude's configured model and effort,
+have a 14-minute review timeout inside a 15-minute hook timeout, and appear as
+`stop-review-gate` jobs in `$claude:status`. Use `$claude:result JOB_ID` for the
+full decision or `$claude:cancel JOB_ID` to cancel a running review. The
+reviewer's own Claude hooks are disabled to avoid recursive reviews.
+
 ## Execution and storage
 
 The runtime calls `claude --print` with only `Read`, `Glob`, and `Grep`
@@ -90,20 +135,22 @@ subagent tools. These are CLI tool restrictions, not an operating-system
 sandbox; the host's permissions still apply. Claude cannot execute tests during
 these reviews.
 
-Every review gets a fresh process and a 20-minute timeout. The plugin does not
-set `--max-turns`; turn limits are left to Claude Code. Background workers
+Explicit reviews get a fresh process and a 20-minute timeout. The plugin does
+not set `--max-turns`; turn limits are left to Claude Code. Background workers
 update a heartbeat and handle cancellation requests by stopping their own Claude
 child. A missing heartbeat marks a job as interrupted rather than successful.
 Jobs continue when a Codex thread ends; use the job ID to cancel them
-explicitly. There are no automatic review hooks or completion notifications;
-status and result are the supported way to check background work.
+explicitly. There are no background completion notifications; status and result
+are the supported way to check background work.
 
 Prompts, findings, and job metadata are stored with private file permissions
 under `~/.codex/plugins/data/claude-review/jobs/`, grouped by repository path.
 Set `CLAUDE_REVIEW_DATA_DIR` to choose another writable location. Artifacts may
 contain source code and are retained until you delete them; remove old job
 directories after their workers finish. They are never written into the reviewed
-checkout.
+checkout. The gate setting is stored as `gate.json` in the same
+checkout-specific data directory. Separate worktrees have independent gate
+settings.
 
 ## Development
 
@@ -142,4 +189,5 @@ follows the [Claude Code CLI reference][claude-cli].
 [claude-cli]: https://code.claude.com/docs/en/cli-reference
 [claude-setup]: https://code.claude.com/docs/en/setup
 [codex-plugins]: https://developers.openai.com/codex/plugins
+[codex-hooks]: https://developers.openai.com/codex/hooks
 [openai-plugin]: https://github.com/openai/codex-plugin-cc

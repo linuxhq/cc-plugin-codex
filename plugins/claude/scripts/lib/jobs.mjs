@@ -15,7 +15,7 @@ import {
 
 export async function prepareJob(repo, root, options) {
   const target = await collectReview(repo, options);
-  if (!target.context) return null;
+  if (!target.context && options.command !== 'stop-review-gate') return null;
   const fileFocus = options['focus-file']
     ? await readFile(options['focus-file'], 'utf8')
     : '';

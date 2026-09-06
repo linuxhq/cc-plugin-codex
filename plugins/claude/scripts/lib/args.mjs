@@ -13,10 +13,23 @@ export function parseCommand(argv) {
     }
     return { command, id: args[0] };
   }
-  if (command === 'setup' && args.length === 0) return { command };
+  if (command === 'setup') return parseSetup(args);
   throw new Error(
     `Unknown command or arguments: ${command}. Run help for usage.`,
   );
+}
+
+function parseSetup(args) {
+  const { values } = parseArgs({
+    args,
+    options: {
+      'enable-review-gate': { type: 'boolean' },
+      'disable-review-gate': { type: 'boolean' },
+    },
+  });
+  if (values['enable-review-gate'] && values['disable-review-gate'])
+    throw new Error('Choose --enable-review-gate or --disable-review-gate.');
+  return { command: 'setup', ...values };
 }
 
 function parseReview(command, args) {
@@ -68,7 +81,7 @@ export const help = `Claude review plugin for Codex
 
 review [--base REF] [--scope auto|working-tree|branch] [--wait|--background]
 adversarial-review [same options] [--focus-file PATH] [focus text...]
-setup
+setup [--enable-review-gate|--disable-review-gate]
 status [JOB_ID]
 result [JOB_ID]
 cancel [JOB_ID]

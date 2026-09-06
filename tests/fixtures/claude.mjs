@@ -28,6 +28,7 @@ if (args[0] === '--version') {
         subtype: 'success',
         is_error: false,
         result:
+          process.env.FAKE_CLAUDE_OUTPUT ??
           '## Findings\n\nP2 app.js:1 — Example finding from the fake CLI.',
       }),
     );
