@@ -31,6 +31,8 @@ If the user did pass a job ID:
 - `--wait` waits until that job is no longer active or the timeout expires.
 - Poll the host process until the status command itself finishes. Default
   timeout: 240000 ms. Default polling interval: 2000 ms.
+- Zero or nonnumeric timing values use those defaults; negative timeouts become
+  zero, and nonzero polling intervals below 100 ms are clamped to 100 ms.
 - A timeout leaves the review running. Preserve the timeout message and current
   state; do not report it as completed.
 

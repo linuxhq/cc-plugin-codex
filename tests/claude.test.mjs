@@ -29,7 +29,6 @@ for (const output of [
   'not JSON',
   '{}',
   'null',
-  '{"subtype":"success","result":""}',
   '{"subtype":"error_max_turns","result":"partial text"}',
   '{"subtype":"success","is_error":true,"result":"failed"}',
 ]) {
@@ -121,13 +120,6 @@ for (const { name, stdout, stderr = '', code = 1, message } of [
       'Claude returned invalid JSON; review did not complete.\n' +
       'Login required\nCredentials expired',
   },
-  {
-    name: 'empty review preserves stderr',
-    stdout: '{"subtype":"success","result":""}',
-    stderr: 'Request interrupted',
-    code: 0,
-    message: 'Claude returned an empty review.\nRequest interrupted',
-  },
 ]) {
   test(`preserves failure diagnostics: ${name}`, () => {
     assert.throws(() => parseResult(stdout, { code, stderr }), { message });
@@ -142,4 +134,8 @@ test('successful reviews still return the review text', () => {
     }),
     'No findings',
   );
+});
+
+test('empty successful output preserves provider completion', () => {
+  assert.equal(parseResult('{"subtype":"success","result":""}'), '');
 });

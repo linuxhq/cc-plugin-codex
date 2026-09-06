@@ -9,10 +9,66 @@ import {
   saveJob,
   jobPath,
 } from '../plugins/claude/scripts/lib/store.mjs';
-import { saveProgress } from '../plugins/claude/scripts/lib/progress.mjs';
+import {
+  saveProgress,
+  formatProgress,
+  updateProgress,
+} from '../plugins/claude/scripts/lib/progress.mjs';
 
 const rootFor = (f) =>
   join(f.env.CLAUDE_REVIEW_DATA_DIR, 'jobs', fingerprint(f.repo).slice(0, 24));
+
+test('result explains when an explicit job is still active', async (t) => {
+  const f = await fixture(t);
+  const job = await createJob(rootFor(f), {
+    repo: f.repo,
+    command: 'rescue',
+    sessionId: 'other-session',
+  });
+  for (const reference of [job.id, job.id.slice(0, 15)]) {
+    const run = await f.run(['result', reference]);
+    assert.equal(run.code, 1);
+    assert.ok(run.stderr.includes(`Job ${job.id} is still queued.`));
+    assert.match(run.stderr, /Check \$claude:status/);
+    assert.doesNotMatch(run.stderr, /not found/);
+  }
+});
+
+test('status duration follows upstream rounding and units', () => {
+  const createdAt = '2026-09-06T00:00:00.000Z';
+  for (const [milliseconds, expected] of [
+    [600, '1s'],
+    [61_000, '1m 1s'],
+    [3_661_000, '1h 1m'],
+  ]) {
+    const finishedAt = new Date(
+      Date.parse(createdAt) + milliseconds,
+    ).toISOString();
+    const output = formatProgress(
+      {
+        createdAt,
+        finishedAt,
+      },
+      'completed',
+      {},
+    );
+    assert.ok(output.includes(`Duration: ${expected}  Phase: done`), output);
+  }
+
+  assert.doesNotMatch(
+    formatProgress({ createdAt: 'invalid' }, 'running', {}),
+    /Elapsed:|NaN/,
+  );
+});
+
+test('progress messages retain the last known phase and session', () => {
+  const progress = updateProgress(
+    { phase: 'verifying', claudeSessionId: 'session' },
+    { summary: 'Still working' },
+  );
+  assert.equal(progress.phase, 'verifying');
+  assert.equal(progress.claudeSessionId, 'session');
+});
 
 test('JSON preserves results and honors cwd and model aliases', async (t) => {
   const f = await fixture(t);
@@ -158,6 +214,26 @@ test('JSON handles setup, empty reviews, and errors', async (t) => {
   assert.match(payload.output, /Account quota exhausted/);
 });
 
+test('task workflows and gate settings work outside Git', async (t) => {
+  const f = await fixture(t);
+  const args = ['--cwd', f.root, '--json'];
+  const setup = await f.run(['setup', '--enable-review-gate', ...args]);
+  assert.equal(setup.code, 0, setup.stderr);
+  assert.equal(JSON.parse(setup.stdout).gate.enabled, true);
+  assert.equal(JSON.parse(setup.stdout).workspaceRoot, f.root);
+  const rescue = await f.run(['rescue', ...args, 'inspect']);
+  assert.equal(rescue.code, 0, rescue.stderr);
+  const job = JSON.parse(rescue.stdout).job;
+  const status = await f.run(['status', ...args]);
+  assert.equal(JSON.parse(status.stdout).latestFinished.id, job.id);
+  const result = await f.run(['result', ...args]);
+  assert.equal(JSON.parse(result.stdout).job.id, job.id);
+  const candidate = await f.run(['rescue-resume-candidate', ...args]);
+  assert.equal(JSON.parse(candidate.stdout).jobId, job.id);
+  assert.equal((await f.run(['review', ...args])).code, 1);
+  assert.equal((await f.run(['adversarial-review', ...args])).code, 1);
+});
+
 test('status wait observes timeout and cancellation', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', 'changed\n');
@@ -177,7 +253,7 @@ test('status wait observes timeout and cancellation', async (t) => {
     id,
     '--wait',
     '--timeout-ms',
-    '0',
+    '-1',
     '--json',
   ]);
   assert.equal(wait.code, 0);
@@ -231,4 +307,122 @@ test('status all expands history and escapes table cells', async (t) => {
   assert.match(table, /^\| Job \|/);
   assert.ok(table.includes('Text \\| with newlines'));
   assert.ok(table.includes('$claude:result'));
+});
+
+test('job prefixes filter by state', async (t) => {
+  const f = await fixture(t);
+  const root = rootFor(f);
+  const finished = await createJob(root, { repo: f.repo, command: 'review' });
+  await saveJob(root, {
+    ...finished,
+    state: 'failed',
+    error: 'Stored failure',
+  });
+  const running = await createJob(root, { repo: f.repo, command: 'review' });
+  const result = await f.run(['result', 'review-', '--json']);
+  assert.equal(result.code, 0, result.stdout);
+  assert.equal(JSON.parse(result.stdout).job.id, finished.id);
+  const cancel = await f.run(['cancel', 'review-', '--json']);
+  assert.equal(cancel.code, 0, cancel.stdout);
+  assert.equal(JSON.parse(cancel.stdout).job.id, running.id);
+  assert.equal((await f.run(['status', 'review-'])).code, 1);
+});
+
+test('status includes settings and follow-up commands', async (t) => {
+  const f = await fixture(t);
+  await f.run(['setup', '--enable-review-gate']);
+  assert.match((await f.run(['status'])).stdout, /enabled/);
+  const job = JSON.parse(
+    (await f.run(['rescue', '--write', '--json', 'fix'])).stdout,
+  ).job;
+  const table = (await f.run(['status'])).stdout;
+  assert.ok(table.includes(job.claudeSessionId));
+  const single = (await f.run(['status', job.id])).stdout;
+  assert.ok(single.includes(`$claude:result ${job.id}`));
+  assert.match(single, /\$claude:review --wait/);
+  assert.match(single, /\$claude:adversarial-review --wait/);
+  const queued = await createJob(rootFor(f), {
+    repo: f.repo,
+    command: 'review',
+  });
+  assert.ok(
+    (await f.run(['status', queued.id])).stdout.includes(
+      `$claude:cancel ${queued.id}`,
+    ),
+  );
+});
+
+test('finished status timing follows upstream coercion', async (t) => {
+  const f = await fixture(t);
+  const job = JSON.parse(
+    (await f.run(['rescue', '--json', 'inspect'])).stdout,
+  ).job;
+  for (const [value, expected] of [
+    ['0', 240000],
+    ['NaN', 240000],
+    ['-1', 0],
+    ['1.5', 1.5],
+  ]) {
+    const run = await f.run([
+      'status',
+      job.id,
+      '--wait',
+      '--timeout-ms',
+      value,
+      '--poll-interval-ms',
+      '1',
+      '--json',
+    ]);
+    assert.equal(run.code, 0, run.stdout);
+    const payload = JSON.parse(run.stdout);
+    assert.equal(payload.timeoutMs, expected);
+    assert.equal(payload.waitTimedOut, false);
+  }
+});
+
+test('finished status summarizes results and failures', async (t) => {
+  const f = await fixture(t);
+  const rescue = JSON.parse(
+    (
+      await f.run(['rescue', '--json', 'inspect'], {
+        FAKE_CLAUDE_OUTPUT: '\nDiagnosis complete.\nMore detail.',
+      })
+    ).stdout,
+  );
+  assert.equal(rescue.job.progress.summary, 'Diagnosis complete.');
+  assert.equal(rescue.job.progress.phase, 'done');
+  assert.match((await f.run(['status', rescue.job.id])).stdout, /Phase: done/);
+  const review = JSON.parse(
+    (await f.run(['adversarial-review', '--json'])).stdout,
+  );
+  assert.equal(
+    review.job.progress.summary,
+    review.job.structuredOutput.summary,
+  );
+  const failed = JSON.parse(
+    (
+      await f.run(['review', '--json'], {
+        FAKE_CLAUDE_MODE: 'fail',
+      })
+    ).stdout,
+  );
+  assert.equal(failed.job.progress.summary, 'Provider unavailable');
+});
+
+test('interrupted results retain continuation information', async (t) => {
+  const f = await fixture(t);
+  const root = rootFor(f);
+  const job = await createJob(root, {
+    repo: f.repo,
+    command: 'rescue',
+    sessionId: 'test-session',
+  });
+  await saveJob(root, { ...job, createdAt: new Date(0).toISOString() });
+  const session = '12345678-1234-1234-1234-123456789abc';
+  await saveProgress(root, job.id, { claudeSessionId: session });
+  const run = await f.run(['result', job.id, '--json']);
+  assert.equal(run.code, 0, run.stdout);
+  const payload = JSON.parse(run.stdout);
+  assert.equal(payload.job.state, 'interrupted');
+  assert.ok(payload.output.includes(`claude --resume ${session}`));
 });

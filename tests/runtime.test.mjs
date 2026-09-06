@@ -38,10 +38,11 @@ test('explicit empty review still invokes the reviewer', async (t) => {
 test('provider failures and malformed output remain failed jobs', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', 'changed\n');
-  for (const mode of ['fail', 'malformed']) {
+  for (const mode of ['fail', 'malformed', 'null-result']) {
     const run = await f.run(['review'], { FAKE_CLAUDE_MODE: mode });
     assert.equal(run.code, 1);
     assert.match(run.stdout, /failed/);
+    assert.doesNotMatch(run.stdout, /Cannot read properties/);
     assert.match((await f.run(['result'])).stdout, /failed/);
   }
 });
@@ -90,7 +91,9 @@ test('cancellation stops a running background Claude process', async (t) => {
   });
   await eventually(async () => {
     const status = (await f.run(['status', id])).stdout;
-    return status.includes('Phase: reading') && status.includes('Using Read.');
+    return (
+      status.includes('Phase: investigating') && status.includes('Using Read.')
+    );
   });
   const status = (await f.run(['status', id])).stdout;
   assert.match(status, /Elapsed: \d+s/);
@@ -106,14 +109,16 @@ test('cancellation stops a running background Claude process', async (t) => {
   assert.doesNotMatch(result.stdout, /Example finding/);
 });
 
-test('adversarial schema is enforced and missing output fails', async (t) => {
+test('adversarial text fallback preserves diagnostics', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', 'changed\n');
   const run = await f.run(['adversarial-review', '--wait'], {
     FAKE_CLAUDE_MODE: 'no-structured',
+    FAKE_CLAUDE_OUTPUT: 'not JSON',
   });
-  assert.equal(run.code, 1);
-  assert.match(run.stdout, /no structured output/);
+  assert.equal(run.code, 0);
+  assert.match(run.stdout, /did not return valid structured JSON/);
+  assert.match(run.stdout, /Raw final message/);
   const request = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   const schema = JSON.parse(
     request.args[request.args.indexOf('--json-schema') + 1],
@@ -125,6 +130,21 @@ test('adversarial schema is enforced and missing output fails', async (t) => {
     'needs-attention',
   ]);
   assert.ok(request.args.includes('stream-json'));
+});
+
+test('empty successful responses show diagnostics', async (t) => {
+  const f = await fixture(t);
+  for (const [command, message] of [
+    ['review', /completed without any stdout/],
+    ['rescue', /did not return a final message/],
+  ]) {
+    const run = await f.run(
+      command === 'rescue' ? [command, 'inspect'] : [command],
+      { FAKE_CLAUDE_OUTPUT: '' },
+    );
+    assert.equal(run.code, 0, run.stderr);
+    assert.match(run.stdout, message);
+  }
 });
 
 test('setup checks authentication without a review', async (t) => {
@@ -156,14 +176,14 @@ test('focus text preserves newlines and shell syntax', async (t) => {
   assert.ok(request.input.includes('First line\nSecond $line `literal`'));
 });
 
-test('invalid adversarial JSON fails with raw diagnostics', async (t) => {
+test('unexpected review shape preserves provider status', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', 'changed\n');
   const run = await f.run(['adversarial-review', '--wait'], {
     FAKE_CLAUDE_OUTPUT: '{"verdict":"approve","findings":[]}',
   });
-  assert.equal(run.code, 1);
-  assert.match(run.stdout, /Missing summary/);
+  assert.equal(run.code, 0);
+  assert.match(run.stdout, /Missing string `summary`/);
   assert.match(run.stdout, /Raw final message/);
-  assert.match((await f.run(['status'])).stdout, /failed/);
+  assert.match((await f.run(['status'])).stdout, /completed/);
 });

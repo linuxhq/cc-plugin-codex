@@ -1,6 +1,11 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { readGateConfig } from './gate-config.mjs';
-import { formatProgress, readProgress } from './progress.mjs';
+import {
+  formatDuration,
+  formatProgress,
+  progressPhase,
+  readProgress,
+} from './progress.mjs';
 import { jobState, listJobs, loadJob, resolveJob } from './store.mjs';
 
 export function currentSessionId() {
@@ -16,6 +21,7 @@ export async function jobSnapshot(root, job) {
   const start = Date.parse(job.startedAt || job.createdAt);
   return {
     ...data,
+    claudeSessionId: job.claudeSessionId || progress.claudeSessionId,
     ...(job.write && ['failed', 'cancelled', 'interrupted'].includes(state)
       ? {
           warning:
@@ -81,8 +87,8 @@ export async function statusReport(root, options = {}) {
 }
 
 async function singleStatus(root, options) {
-  const timeoutMs = options['timeout-ms'] ?? 240_000;
-  const pollMs = options['poll-interval-ms'] ?? 2000;
+  const timeoutMs = Math.max(0, Number(options['timeout-ms']) || 240_000);
+  const pollMs = Math.max(100, Number(options['poll-interval-ms']) || 2000);
   const deadline = Date.now() + timeoutMs;
   let job = await jobSnapshot(root, await resolveJob(root, options.id));
   while (options.wait && active(job) && Date.now() < deadline) {
@@ -100,9 +106,22 @@ async function singleStatus(root, options) {
     text:
       text +
       continuation +
+      followupActions(job) +
       (job.warning ? `\nWarning: ${job.warning}` : '') +
       (waitTimedOut ? '\nWait timed out; the job is still active.' : ''),
   };
+}
+
+function followupActions(job) {
+  if (active(job)) return `\nCancel: $claude:cancel ${job.id}`;
+
+  return (
+    `\nResult: $claude:result ${job.id}` +
+    (job.command === 'rescue' && job.write
+      ? '\nReview changes: $claude:review --wait' +
+        '\nStricter review: $claude:adversarial-review --wait'
+      : '')
+  );
 }
 
 function cell(value) {
@@ -113,8 +132,9 @@ function cell(value) {
 
 function renderTable(jobs, gate) {
   const lines = [
-    '| Job | Kind | Status | Phase | Time | Summary | Gate | Actions |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Job | Kind | Status | Phase | Time | Claude Session ID | ' +
+      'Summary | Gate | Actions |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const job of jobs) {
     const followup = active(job) ? 'cancel' : 'result';
@@ -122,8 +142,9 @@ function renderTable(jobs, gate) {
       job.id,
       job.command,
       job.state,
-      active(job) ? job.progress.phase || job.state : job.state,
-      `${Math.floor(job.elapsedMs / 1000)}s`,
+      progressPhase(job.state, job.progress),
+      formatDuration(0, job.elapsedMs) || '',
+      job.claudeSessionId,
       job.warning || job.progress.summary || job.error,
       gate ? 'enabled' : 'disabled',
       `$claude:status ${job.id}; $claude:${followup} ${job.id}`,
@@ -132,7 +153,10 @@ function renderTable(jobs, gate) {
   }
 
   if (!jobs.length)
-    lines.push('| No review jobs in this session. | | | | | | | |');
+    lines.push(
+      '| No review jobs in this session. | | | | | | | ' +
+        `${gate ? 'enabled' : 'disabled'} | |`,
+    );
 
   return lines.join('\n');
 }

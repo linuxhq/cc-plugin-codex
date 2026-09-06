@@ -3,6 +3,42 @@ import test from 'node:test';
 import { reviewStream } from '../plugins/claude/scripts/lib/stream.mjs';
 import { parseResult } from '../plugins/claude/scripts/lib/claude.mjs';
 
+test('repeated session IDs do not reset ongoing progress', () => {
+  const phases = [];
+  const stream = reviewStream(
+    (update) => phases.push(update.phase),
+    () => phases.push('starting'),
+  );
+  for (const event of [
+    { type: 'system', subtype: 'init' },
+    {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', name: 'Write' }],
+      },
+    },
+    { type: 'result', subtype: 'success', result: 'Done' },
+  ]) {
+    stream.write(JSON.stringify({ ...event, session_id: 'session' }) + '\n');
+  }
+
+  assert.equal(parseResult(stream.finish()), 'Done');
+  assert.deepEqual(phases, ['starting', 'reviewing', 'editing']);
+});
+
+test('large result events survive arbitrary stream boundaries', () => {
+  const result = 'x'.repeat(16 * 1024 * 1024 + 1);
+  const wire = JSON.stringify({
+    type: 'result',
+    subtype: 'success',
+    result,
+  });
+  const stream = reviewStream();
+  stream.write(wire.slice(0, -1));
+  stream.write(wire.slice(-1) + '\n');
+  assert.equal(parseResult(stream.finish()), result);
+});
+
 test('fragmented events preserve the result and exclude thinking', () => {
   const updates = [];
   const stream = reviewStream((progress) => updates.push(progress));
@@ -31,8 +67,8 @@ test('fragmented events preserve the result and exclude thinking', () => {
     stream.write(wire.slice(offset, offset + 7));
 
   assert.equal(parseResult(stream.finish()), 'Final review é');
-  assert.ok(updates.some((update) => update.phase === 'reading'));
-  assert.ok(updates.some((update) => update.phase === 'writing'));
+  assert.ok(updates.some((update) => update.phase === 'investigating'));
+  assert.ok(updates.some((update) => update.phase === 'finalizing'));
   assert.ok(!JSON.stringify(updates).includes('PRIVATE_THINKING'));
 });
 
@@ -113,4 +149,28 @@ test('multiple final results fail instead of choosing a verdict', () => {
   const stream = reviewStream();
   const line = '{"type":"result","subtype":"success","result":"OK"}\n';
   assert.throws(() => stream.write(line + line), /multiple result/);
+});
+
+test('tool activity distinguishes work phases', () => {
+  const updates = [];
+  const stream = reviewStream((update) => updates.push(update));
+  for (const [name, input] of [
+    ['Edit', {}],
+    ['Write', {}],
+    ['Bash', { command: 'npm test' }],
+    ['Bash', { command: 'git status' }],
+    ['Read', {}],
+  ]) {
+    stream.write(
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name, input }] },
+      }) + '\n',
+    );
+  }
+
+  assert.deepEqual(
+    updates.map((update) => update.phase),
+    ['editing', 'editing', 'verifying', 'running', 'investigating'],
+  );
 });

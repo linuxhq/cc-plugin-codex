@@ -30,13 +30,14 @@ export function jobPath(root, id, name = 'job.json') {
 export async function saveJob(root, job) {
   const path = jobPath(root, job.id);
   const temporary = `${path}.${randomUUID()}.tmp`;
-  const data = ['rescue', 'transfer'].includes(job.command)
+  const data = ['rescue', 'transfer', 'stop-review-gate'].includes(job.command)
     ? { ...job, prompt: undefined }
     : job;
   await writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, {
     mode: 0o600,
   });
   await rename(temporary, path);
+  if (terminalStates.includes(job.state)) await pruneJobs(root);
 }
 
 export async function createJob(root, details) {
@@ -46,9 +47,9 @@ export async function createJob(root, details) {
     state: 'queued',
     createdAt: new Date().toISOString(),
   };
-  await pruneJobs(root);
   await mkdir(join(root, job.id), { recursive: true, mode: 0o700 });
   await saveJob(root, job);
+  await pruneJobs(root);
   return job;
 }
 
@@ -94,11 +95,11 @@ export async function listJobs(root) {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-export async function resolveJob(root, reference) {
-  if (reference && !/^review-[a-f0-9-]+$/.test(reference))
+export async function resolveJob(root, reference, predicate = () => true) {
+  if (reference && !/^[a-z0-9-]+$/.test(reference))
     throw new Error('Invalid job ID.');
 
-  const jobs = await listJobs(root);
+  const jobs = (await listJobs(root)).filter(predicate);
   if (!reference) {
     if (!jobs.length) throw new Error('No review jobs in this repository.');
 
@@ -142,13 +143,30 @@ export async function jobState(root, job) {
   return job.state;
 }
 
-// Keep active jobs regardless of age. Run before each new job is created.
+// Active worker records must remain available for cancellation and completion.
 export async function pruneJobs(root, { maxCount = 50 } = {}) {
-  const finished = (await listJobs(root)).filter((job) =>
-    terminalStates.includes(job.state),
-  );
+  const jobs = await listJobs(root);
+  const finished = jobs
+    .filter((job) => terminalStates.includes(job.state))
+    .sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
+  const finishedLimit = Math.max(0, maxCount - (jobs.length - finished.length));
   for (const [index, job] of finished.entries()) {
-    if (index >= maxCount)
+    if (index >= finishedLimit)
       await rm(join(root, job.id), { recursive: true, force: true });
   }
+}
+
+function lastActivity(job) {
+  return (
+    [
+      job.createdAt,
+      job.startedAt,
+      job.finishedAt,
+      job.updatedAt,
+      job.progress?.updatedAt,
+    ]
+      .filter(Boolean)
+      .sort()
+      .at(-1) || ''
+  );
 }

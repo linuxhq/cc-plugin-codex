@@ -31,6 +31,7 @@ export async function fixture(t, { commit = true } = {}) {
   const env = {
     ...process.env,
     CODEX_THREAD_ID: 'test-session',
+    CODEX_HOME: join(root, 'codex'),
     PATH: `${bin}${delimiter}${process.env.PATH}`,
     CLAUDE_REVIEW_DATA_DIR: join(root, 'data'),
     FAKE_CLAUDE_CAPTURE: join(root, 'request.json'),
@@ -53,10 +54,11 @@ export async function fixture(t, { commit = true } = {}) {
     await git('commit', '-m', 'Initial');
   }
 
-  const run = (args, overrides = {}) =>
+  const run = (args, overrides = {}, options = {}) =>
     runProcess(process.execPath, [cli, ...args], {
       cwd: repo,
       env: { ...env, ...overrides },
+      ...options,
     });
   const cleanup = (callback) => cleanups.push(callback);
   return { root, repo, env, git, write, run, cleanup };

@@ -1,6 +1,5 @@
-import { sensitive, secretExclusions } from './repository-policy.mjs';
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readlink } from 'node:fs/promises';
+import { lstat, readFile, readlink, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runProcess } from './process.mjs';
 
@@ -29,6 +28,14 @@ export async function git(cwd, args, options = {}) {
 
 export async function repositoryRoot(cwd) {
   return (await git(cwd, ['rev-parse', '--show-toplevel'])).trimEnd();
+}
+
+export async function workspaceRoot(cwd) {
+  try {
+    return await repositoryRoot(cwd);
+  } catch {
+    return realpath(cwd);
+  }
 }
 
 export function fingerprint(value) {
@@ -126,7 +133,7 @@ async function diffContext(repo, sections, files) {
   if (files.length <= 2) {
     for (const [label, args] of sections) {
       parts.push(`${label}\n`);
-      await git(repo, [...diffFlags, ...args, '--', ...secretExclusions], {
+      await git(repo, [...diffFlags, ...args, '--'], {
         captureStdout: false,
         onStdout(chunk) {
           bytes += Buffer.byteLength(chunk);
@@ -221,8 +228,6 @@ async function workingContext(repo) {
 }
 
 async function untrackedFile(repo, file) {
-  if (sensitive.test(file)) return 'Sensitive untracked file omitted.';
-
   const path = join(repo, file);
   const title = `UNTRACKED FILE ${JSON.stringify(file)}\n`;
   try {

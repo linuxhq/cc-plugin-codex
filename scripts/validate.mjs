@@ -44,6 +44,12 @@ for (const name of names) {
   assert.equal(metadata.name, name);
   assert.ok(metadata.description.length > 20);
   assert.ok(!text.includes('[TODO:'));
+  if (!['rescue', 'setup'].includes(name)) {
+    const agent = parse(
+      await readFile(new URL(`${name}/agents/openai.yaml`, skillRoot), 'utf8'),
+    );
+    assert.equal(agent.policy.allow_implicit_invocation, false);
+  }
 }
 
 for (const name of ['lint', 'format', 'test']) {
@@ -69,6 +75,7 @@ for (const path of [
   'NOTICE',
   'prompts/stop-review-gate.md',
   'scripts/stop-review-gate-hook.mjs',
+  'scripts/session-lifecycle-hook.mjs',
   'hooks/hooks.json',
 ]) {
   await access(new URL(join('plugins/claude', path), root));
@@ -82,6 +89,13 @@ assert.equal(
   'node "${PLUGIN_ROOT}/scripts/stop-review-gate-hook.mjs"',
 );
 assert.equal(stop.timeout, 900);
+const end = hooks.hooks.SessionEnd[0].hooks[0];
+assert.equal(end.type, 'command');
+assert.equal(
+  end.command,
+  'node "${PLUGIN_ROOT}/scripts/session-lifecycle-hook.mjs" SessionEnd',
+);
+assert.equal(end.timeout, 5);
 assert.ok(!Object.hasOwn(manifest, 'hooks'), 'Use default hook discovery');
 console.log(
   `Validated plugin, marketplace, and ${names.length} command skills.`,

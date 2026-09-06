@@ -58,11 +58,53 @@ test('retention prunes finished jobs and preserves active jobs', async (t) => {
   await pruneJobs(root, { maxCount: 2 });
   assert.deepEqual(
     new Set((await listJobs(root)).map((job) => job.id)),
-    new Set([active.id, finished[0].id, finished[1].id]),
+    new Set([active.id, finished[0].id]),
   );
   finished[0].finishedAt = new Date(0).toISOString();
   await saveJob(root, finished[0]);
   await createJob(root, { repo: f.repo });
   assert.equal((await loadJob(root, finished[0].id)).state, 'completed');
   assert.equal((await loadJob(root, active.id)).state, 'queued');
+});
+
+test('retention keeps recent completions', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const older = await createJob(root, { repo: f.repo });
+  const newer = await createJob(root, { repo: f.repo });
+  await saveJob(root, {
+    ...newer,
+    state: 'completed',
+    createdAt: '2026-01-02T00:00:00Z',
+    finishedAt: '2026-01-03T00:00:00Z',
+  });
+  await saveJob(root, {
+    ...older,
+    state: 'completed',
+    createdAt: '2026-01-01T00:00:00Z',
+    finishedAt: '2026-01-04T00:00:00Z',
+  });
+  await pruneJobs(root, { maxCount: 1 });
+  assert.deepEqual(
+    (await listJobs(root)).map((job) => job.id),
+    [older.id],
+  );
+});
+
+test('retention enforces the 50-job limit after completion', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const active = await createJob(root, { repo: f.repo });
+  for (let i = 0; i < 51; i++) {
+    const job = await createJob(root, { repo: f.repo });
+    await saveJob(root, {
+      ...job,
+      state: 'completed',
+      finishedAt: new Date(Date.now() + i * 1000).toISOString(),
+    });
+  }
+
+  const retained = await listJobs(root);
+  assert.equal(retained.length, 50);
+  assert.ok(retained.some((job) => job.id === active.id));
 });

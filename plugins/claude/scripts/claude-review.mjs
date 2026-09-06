@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { help, parseCommand } from './lib/args.mjs';
 import { setup } from './lib/setup.mjs';
-import { repositoryRoot } from './lib/git.mjs';
+import { repositoryRoot, workspaceRoot } from './lib/git.mjs';
 import {
   cancelJob,
   launchBackground,
@@ -15,6 +15,7 @@ import { storeRoot } from './lib/store.mjs';
 import { executeJob } from './lib/worker.mjs';
 import { jobSnapshot, statusReport } from './lib/status.mjs';
 import { resumeCandidate } from './lib/tasks.mjs';
+import { checkAvailability } from './lib/claude.mjs';
 
 function emit(payload, text, json) {
   console.log(json ? JSON.stringify(payload) : text);
@@ -27,7 +28,9 @@ async function main(options) {
 
   if (options.command === 'setup') return showSetup(options);
 
-  const repo = await repositoryRoot(process.cwd());
+  const repo = await (['review', 'adversarial-review'].includes(options.command)
+    ? repositoryRoot(process.cwd())
+    : workspaceRoot(process.cwd()));
   const root = storeRoot(repo);
   if (options.command === 'rescue-resume-candidate') {
     const candidate = await resumeCandidate(root);
@@ -55,6 +58,8 @@ async function main(options) {
   if (options.command === 'result')
     return showResult(root, options.id, options.json);
 
+  await readTaskInput(options);
+
   const job = await prepareJob(repo, root, options);
   if (options.background) {
     await launchBackground(root, job);
@@ -68,6 +73,18 @@ async function main(options) {
   const completed = await executeJob(root, job.id, { prompt: job.prompt });
   await showResult(root, job.id, options.json);
   if (completed.state !== 'completed') process.exitCode = 1;
+}
+
+async function readTaskInput(options) {
+  if (options.command !== 'rescue') return;
+
+  if (options.background) await checkAvailability();
+
+  if (options.focus || options['prompt-file'] || process.stdin.isTTY) return;
+
+  process.stdin.setEncoding('utf8');
+  options.focus = '';
+  for await (const chunk of process.stdin) options.focus += chunk;
 }
 
 async function showSetup(options) {

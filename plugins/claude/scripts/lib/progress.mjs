@@ -9,12 +9,13 @@ export function updateProgress(previous, update) {
     .slice(0, 240);
   const preview = previous.preview ?? [];
   return {
-    phase: update.phase,
+    claudeSessionId: update.claudeSessionId || previous.claudeSessionId,
+    phase: update.phase || previous.phase,
     summary,
     updatedAt: new Date().toISOString(),
     preview:
       summary && preview.at(-1) !== summary
-        ? [...preview, summary].slice(-5)
+        ? [...preview, summary].slice(-4)
         : preview,
   };
 }
@@ -41,14 +42,12 @@ export async function readProgress(root, job) {
 export function formatProgress(job, state, progress, detailed) {
   const end = job.finishedAt ? Date.parse(job.finishedAt) : Date.now();
   const start = Date.parse(job.startedAt || job.createdAt);
-  const seconds = Math.max(0, Math.floor((end - start) / 1000));
-  const phase = ['queued', 'running', 'cancelling'].includes(state)
-    ? progress.phase || state
-    : state;
+  const duration = formatDuration(start, end);
+  const phase = progressPhase(state, progress);
   const elapsedLabel = job.finishedAt ? 'Duration' : 'Elapsed';
   const lines = [
     `${job.id}  ${state}  ${job.command}  ${job.createdAt}`,
-    `  ${elapsedLabel}: ${seconds}s  Phase: ${phase}`,
+    `  ${duration ? `${elapsedLabel}: ${duration}  ` : ''}Phase: ${phase}`,
   ];
   if (progress.summary) lines.push(`  Summary: ${progress.summary}`);
 
@@ -58,4 +57,27 @@ export function formatProgress(job, state, progress, detailed) {
     lines.push('  Progress:', ...progress.preview.map((line) => `    ${line}`));
 
   return lines.join('\n');
+}
+
+export function formatDuration(start, end) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
+    return null;
+
+  const totalSeconds = Math.max(0, Math.round((end - start) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+
+  return `${seconds}s`;
+}
+
+export function progressPhase(state, progress = {}) {
+  if (state === 'completed') return 'done';
+
+  return ['queued', 'running', 'cancelling'].includes(state)
+    ? progress.phase || state
+    : state;
 }

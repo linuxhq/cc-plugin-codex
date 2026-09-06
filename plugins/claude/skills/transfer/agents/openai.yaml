@@ -1,0 +1,5 @@
+interface:
+  display_name: 'Claude Transfer'
+  short_description: 'Args: --source PATH. Hand off the Codex conversation.'
+policy:
+  allow_implicit_invocation: false

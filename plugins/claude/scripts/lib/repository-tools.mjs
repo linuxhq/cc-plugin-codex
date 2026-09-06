@@ -1,8 +1,7 @@
 import { constants } from 'node:fs';
-import { open, realpath } from 'node:fs/promises';
+import { open, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { git } from './git.mjs';
-import { sensitive, secretExclusions } from './repository-policy.mjs';
+import { git, repositoryRoot } from './git.mjs';
 import { inspectionPage } from './inspection-page.mjs';
 
 export const inspectionTool = {
@@ -121,9 +120,15 @@ async function listFiles(repo, input, options) {
   const page = inspectionPage(input, {
     ...options,
     separator: '\0',
-    include: (file) => !sensitive.test(file),
     render: (file) => JSON.stringify(file),
   });
+  try {
+    await repositoryRoot(repo);
+  } catch {
+    await listDirectory(repo, repo, input.path, page);
+    return page.finish();
+  }
+
   await streamGit(
     repo,
     [
@@ -141,29 +146,20 @@ async function listFiles(repo, input, options) {
   return page.finish();
 }
 
-async function reviewableFile(repo, file) {
-  validatePath(file);
-  if (sensitive.test(file)) throw new Error('Sensitive file; not reviewed.');
-
-  // Query only the literal path, never materialize the repository file list.
-  const match = await git(repo, [
-    'ls-files',
-    '--cached',
-    '--others',
-    '--exclude-standard',
-    '-z',
-    '--',
-    `:(literal)${file}`,
-  ]);
-  if (!match.split('\0').includes(file))
-    throw new Error('File is outside reviewable repository files.');
+async function listDirectory(root, directory, filter, page) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    const file = relative(root, path);
+    if (entry.isDirectory()) await listDirectory(root, path, filter, page);
+    else if (!filter || file === filter || file.startsWith(`${filter}/`))
+      page.write(`${file}\0`);
+  }
 }
 
 async function readRepositoryFile(repo, file, page) {
-  await reviewableFile(repo, file);
+  validatePath(file);
   const path = await realpath(resolve(repo, file));
-  if (!inside(repo, path) || sensitive.test(relative(repo, path)))
-    throw new Error('File escapes repository or is sensitive.');
+  if (!inside(repo, path)) throw new Error('File escapes repository.');
 
   const handle = await open(
     path,
@@ -193,7 +189,7 @@ async function diff(repo, input, page) {
     '--no-ext-diff',
     '--no-textconv',
     '--no-color',
-    '--submodule=short',
+    '--submodule=diff',
   ];
   if (input.base) {
     const revision = (
@@ -212,12 +208,7 @@ async function diff(repo, input, page) {
 
   return streamGit(
     repo,
-    [
-      ...args,
-      '--',
-      input.path ? `:(literal)${input.path}` : '.',
-      ...secretExclusions,
-    ],
+    [...args, '--', input.path ? `:(literal)${input.path}` : '.'],
     page,
   );
 }

@@ -131,14 +131,14 @@ test('more than two files uses summary even for tiny patches', async (t) => {
   assert.match(target.collectionGuidance, /Use the repository inspect tool/);
 });
 
-test('inline secrets are excluded and guidance uses tools', async (t) => {
+test('inline review includes configuration changes', async (t) => {
   const f = await fixture(t);
   await f.write('.env', 'old-private-sentinel\n');
   await f.git('add', '.');
   await f.git('commit', '-m', 'Secret fixture');
   await f.write('.env', 'new-private-sentinel\n');
   const target = await collectReview(f.repo, { command: 'adversarial-review' });
-  assert.doesNotMatch(target.context, /private-sentinel/);
+  assert.match(target.context, /private-sentinel/);
   const review = await collectReview(f.repo, { command: 'review' });
   assert.match(review.context, /inspect tool/);
   assert.doesNotMatch(review.context, /Git commands/);

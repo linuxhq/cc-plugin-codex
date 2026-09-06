@@ -14,7 +14,6 @@ test('task options reject conflicting modes and preserve literal input', () => {
     ['rescue', '--fresh', '--resume'],
     ['rescue', '--fresh', '--resume-last'],
     ['rescue', '--wait', '--background'],
-    ['rescue', '--prompt-file', 'task.txt', 'extra'],
     ['rescue', '--resume-job', ''],
     ['transfer', '--write'],
     ['transfer', '--source', 'a', '--prompt-file', 'b'],
@@ -100,6 +99,18 @@ test('empty tasks and nonpersistent reviews cannot be resumed', async (t) => {
   );
 });
 
+test('background rescue checks availability before launch', async (t) => {
+  const f = await fixture(t);
+  const launch = await f.run(['rescue', '--background', '--json', 'inspect'], {
+    FAKE_CLAUDE_MODE: 'unavailable',
+  });
+  assert.equal(launch.code, 1);
+  assert.match(JSON.parse(launch.stdout).error, /could not start/);
+  const status = JSON.parse((await f.run(['status', '--json'])).stdout);
+  assert.deepEqual(status.running, []);
+  assert.equal(status.latestFinished, null);
+});
+
 test('background rescue saves prompt files before returning', async (t) => {
   const f = await fixture(t);
   const input = join(f.root, 'task with spaces.txt');
@@ -121,6 +132,35 @@ test('background rescue saves prompt files before returning', async (t) => {
   assert.equal(capture.input, 'investigate\nwithout edits');
   const status = await f.run(['status', id]);
   assert.match(status.stdout, /Continue: claude --resume/);
+});
+
+test('relative inputs use the invocation directory', async (t) => {
+  const f = await fixture(t);
+  const nested = join(f.repo, 'nested');
+  await mkdir(nested);
+  await writeFile(
+    join(nested, 'task.txt'),
+    'Investigate from the subdirectory',
+  );
+  for (const args of [
+    ['rescue', '--prompt-file', 'task.txt'],
+    ['rescue', '--cwd', '.', '--prompt-file', 'task.txt'],
+    ['rescue', '--prompt-file', 'task.txt', 'ignored positional prompt'],
+  ]) {
+    const run = await f.run(args, {}, { cwd: nested });
+    assert.equal(run.code, 0, run.stderr);
+    const capture = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+    assert.equal(capture.input, 'Investigate from the subdirectory');
+  }
+
+  const source = await transcriptSource(f);
+  await symlink(source, join(nested, 'session.jsonl'));
+  const transfer = await f.run(
+    ['transfer', '--source', 'session.jsonl'],
+    {},
+    { cwd: nested },
+  );
+  assert.equal(transfer.code, 0, transfer.stderr);
 });
 
 function transcript() {
@@ -162,9 +202,17 @@ function transcript() {
     .join('\n');
 }
 
+async function transcriptSource(f) {
+  const dir = join(f.env.CODEX_HOME, 'sessions');
+  await mkdir(dir, { recursive: true });
+  const source = join(dir, 'session.jsonl');
+  await writeFile(source, transcript());
+  return source;
+}
+
 test('transfer saves context with tools disabled', async (t) => {
   const f = await fixture(t);
-  const source = join(f.root, 'session.jsonl');
+  const source = await transcriptSource(f);
   const original = transcript();
   await writeFile(source, original);
   const run = await f.run(['transfer', '--source', source, '--json']);
@@ -196,16 +244,44 @@ test('transfer discovers transcripts', async (t) => {
   assert.equal(run.code, 0, run.stderr + run.stdout);
 });
 
-test('context rejects malformed, oversized, and symlink inputs', async (t) => {
+test('transfer has no adapter-specific 8 MiB input cap', async (t) => {
+  const f = await fixture(t);
+  const source = await transcriptSource(f);
+  const text =
+    transcript() +
+    '\n' +
+    JSON.stringify({
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'x'.repeat(8 * 1024 * 1024) }],
+      },
+    });
+  await writeFile(source, text);
+  const run = await f.run(['transfer', '--source', source, '--json']);
+  assert.equal(run.code, 0, run.stderr);
+  const capture = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+  assert.equal(JSON.parse(capture.input).at(-1).text.length, 8 * 1024 * 1024);
+});
+
+test('transfer rejects malformed and non-session inputs', async (t) => {
   const f = await fixture(t);
   assert.throws(() => transcriptMessages('not json'));
   assert.throws(() => transcriptMessages('{}'));
-  const large = join(f.root, 'large.txt');
-  await writeFile(large, Buffer.alloc(8 * 1024 * 1024 + 1));
-  await assert.rejects(readContextFile(large), /at most 8 MiB/);
-  const link = join(f.root, 'link.txt');
-  await symlink(large, link);
-  await assert.rejects(readContextFile(link));
+  const outside = join(f.root, 'outside.jsonl');
+  await writeFile(outside, transcript());
+  const rejected = await f.run(['transfer', '--source', outside]);
+  assert.equal(rejected.code, 1);
+  assert.match(rejected.stderr, /inside CODEX_HOME/);
+  const source = await transcriptSource(f);
+  const link = join(f.env.CODEX_HOME, 'sessions', 'escape.jsonl');
+  await symlink(outside, link);
+  assert.equal((await f.run(['transfer', '--source', link])).code, 1);
+  const validLink = join(f.root, 'valid-link.jsonl');
+  await symlink(source, validLink);
+  assert.equal((await f.run(['transfer', '--source', validLink])).code, 0);
+  await assert.rejects(readContextFile(join(f.root, 'not-jsonl.txt')), /JSONL/);
 });
 
 test('missing session IDs preserve results and discard prompts', async (t) => {
@@ -236,7 +312,7 @@ test('missing session IDs preserve results and discard prompts', async (t) => {
 
 test('transferred context cannot become a rescue continuation', async (t) => {
   const f = await fixture(t);
-  const source = join(f.root, 'session.jsonl');
+  const source = await transcriptSource(f);
   await writeFile(source, transcript());
   const transfer = JSON.parse(
     (await f.run(['transfer', '--source', source, '--json'])).stdout,
@@ -259,11 +335,16 @@ test('transferred context cannot become a rescue continuation', async (t) => {
   );
 });
 
-test('sensitive context filenames are refused', async (t) => {
+test('explicit prompt files are not filtered by filename', async (t) => {
   const f = await fixture(t);
   const path = join(f.root, '.env');
   await writeFile(path, 'TOKEN=secret');
-  await assert.rejects(readContextFile(path), /Sensitive/);
+  const run = await f.run(['rescue', '--prompt-file', path]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.equal(
+    JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).input,
+    'TOKEN=secret',
+  );
 });
 
 test('large background prompts arrive and are cleaned up', async (t) => {
@@ -306,6 +387,88 @@ test('upstream resume-last continues without new task text', async (t) => {
   assert.equal(
     JSON.parse(resumed.stdout).job.claudeSessionId,
     first.job.claudeSessionId,
+  );
+});
+
+test('rescue accepts stdin with positional precedence', async (t) => {
+  const f = await fixture(t);
+  const input = 'investigate\nwith $(literal) and `text`';
+  const piped = await f.run(['rescue', '--json'], {}, { input });
+  assert.equal(piped.code, 0, piped.stderr);
+  assert.equal(
+    JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).input,
+    input,
+  );
+  const positional = await f.run(
+    ['rescue', '--json', 'explicit'],
+    {},
+    { input },
+  );
+  assert.equal(positional.code, 0, positional.stderr);
+  assert.equal(
+    JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).input,
+    'explicit',
+  );
+});
+
+test('failed rescue resumes outside a host session', async (t) => {
+  const f = await fixture(t);
+  const env = { CODEX_THREAD_ID: '', CODEX_SESSION_ID: '' };
+  const failed = await f.run(['rescue', '--json', 'inspect'], {
+    ...env,
+    FAKE_CLAUDE_MODE: 'json-error',
+  });
+  assert.equal(failed.code, 1);
+  const report = JSON.parse(failed.stdout);
+  assert.equal(report.job.state, 'failed');
+  assert.match(report.output, /Provider request failed/);
+  assert.match(report.output, /Account quota exhausted/);
+  assert.match(report.output, /Continue: claude --resume/);
+  const candidate = JSON.parse(
+    (await f.run(['rescue-resume-candidate', '--json'], env)).stdout,
+  );
+  assert.equal(candidate.jobId, report.job.id);
+  const resumed = await f.run(['rescue', '--resume', '--json'], env);
+  assert.equal(resumed.code, 0, resumed.stderr);
+  assert.equal(
+    JSON.parse(resumed.stdout).job.claudeSessionId,
+    report.job.claudeSessionId,
+  );
+});
+
+test('resume waits for active rescue and accepts cancelled jobs', async (t) => {
+  const f = await fixture(t);
+  await f.run(['rescue', 'first']);
+  const launch = await f.run(['rescue', '--background', '--json', 'slow'], {
+    FAKE_CLAUDE_MODE: 'slow',
+  });
+  assert.equal(launch.code, 0, launch.stderr);
+  const id = JSON.parse(launch.stdout).job.id;
+  f.cleanup(async () => {
+    await f.run(['cancel', id]);
+    await f.run(['status', id, '--wait']);
+  });
+  await eventually(
+    async () =>
+      JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE)).input === 'slow',
+  );
+  const blocked = await f.run(['rescue', '--resume', 'continue']);
+  assert.equal(blocked.code, 1);
+  assert.match(blocked.stderr, /still running/);
+  await f.run(['cancel', id]);
+  const done = await f.run(['status', id, '--wait', '--json']);
+  const job = JSON.parse(done.stdout).job;
+  assert.equal(job.state, 'cancelled');
+  assert.ok(job.claudeSessionId);
+  const candidate = JSON.parse(
+    (await f.run(['rescue-resume-candidate', '--json'])).stdout,
+  );
+  assert.equal(candidate.jobId, id);
+  const resumed = await f.run(['rescue', '--resume', '--json']);
+  assert.equal(resumed.code, 0, resumed.stderr);
+  assert.equal(
+    JSON.parse(resumed.stdout).job.claudeSessionId,
+    job.claudeSessionId,
   );
 });
 

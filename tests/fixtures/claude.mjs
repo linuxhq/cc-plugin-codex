@@ -35,21 +35,50 @@ if (args[0] === '--version') {
     process.env.FAKE_CLAUDE_CAPTURE,
     JSON.stringify({ args, input, cwd: process.cwd(), pid: process.pid }),
   );
+  const sessionId =
+    mode === 'missing-session'
+      ? undefined
+      : args.includes('--session-id')
+        ? args[args.indexOf('--session-id') + 1]
+        : args.includes('--resume')
+          ? args[args.indexOf('--resume') + 1]
+          : randomUUID();
   if (args.includes('stream-json')) {
-    console.log(JSON.stringify({ type: 'system', subtype: 'init' }));
+    console.log(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        session_id: sessionId,
+      }),
+    );
     console.log(JSON.stringify({ type: 'tool_progress', tool_name: 'Read' }));
   }
 
   if (mode === 'slow') await delay(60_000);
 
-  if (mode === 'fail') {
-    console.error('Provider unavailable');
+  if (mode === 'fail' || mode === 'unauthenticated') {
+    console.error(
+      mode === 'fail' ? 'Provider unavailable' : 'Not authenticated',
+    );
     process.exitCode = 2;
+  } else if (mode === 'session-limit') {
+    console.log(
+      JSON.stringify({
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        result:
+          "You've hit your session limit · resets 3:50pm " +
+          '(America/Los_Angeles)',
+      }),
+    );
+    process.exitCode = 1;
   } else if (mode === 'json-error') {
     console.log(
       JSON.stringify({
         subtype: 'success',
         is_error: true,
+        session_id: sessionId,
         result: 'Provider request failed',
         errors: ['Account quota exhausted'],
       }),
@@ -58,18 +87,13 @@ if (args[0] === '--version') {
     process.exitCode = 1;
   } else if (mode === 'malformed') {
     console.log('not json');
+  } else if (mode === 'null-result') {
+    console.log('null');
   } else {
     console.log(
       JSON.stringify({
         type: 'result',
-        session_id:
-          mode === 'missing-session'
-            ? undefined
-            : args.includes('--session-id')
-              ? args[args.indexOf('--session-id') + 1]
-              : args.includes('--resume')
-                ? args[args.indexOf('--resume') + 1]
-                : randomUUID(),
+        session_id: sessionId,
         duration_ms: 123,
         total_cost_usd: 0.01,
         usage: { input_tokens: 10, output_tokens: 5 },

@@ -43,7 +43,6 @@ test('untrusted arguments cannot escape the repo', async (t) => {
     { operation: 'read', path: '../private' },
     { operation: 'read', path: outside },
     { operation: 'read', path: 'escape' },
-    { operation: 'read', path: '.env' },
     { operation: 'diff', base: '--output=../private' },
     { operation: 'diff', base: 'HEAD; touch ../private' },
     { operation: 'diff', output: outside },
@@ -96,7 +95,32 @@ test('MCP exposes only repository inspection', async (t) => {
   assert.equal(replies[3].error.code, -32601);
 });
 
-test('diff excludes secrets in all layers', async (t) => {
+test('inspection lists and reads workspaces without Git', async (t) => {
+  const f = await fixture(t);
+  const directory = join(f.root, 'workspace');
+  await mkdir(join(directory, 'nested'), { recursive: true });
+  await writeFile(join(directory, 'nested', 'task.txt'), 'workspace context');
+  await symlink(f.repo, join(directory, 'outside'));
+  const files = await repo.inspectRepository(directory, { operation: 'files' });
+  assert.match(files, /nested\/task.txt/);
+  assert.doesNotMatch(files, /app.js/);
+  assert.match(
+    await repo.inspectRepository(directory, {
+      operation: 'read',
+      path: 'nested/task.txt',
+    }),
+    /workspace context/,
+  );
+  await assert.rejects(
+    repo.inspectRepository(directory, {
+      operation: 'read',
+      path: 'outside/app.js',
+    }),
+    /escapes/,
+  );
+});
+
+test('every diff layer includes configuration and key fixtures', async (t) => {
   const f = await fixture(t);
   await mkdir(join(f.repo, 'nested'));
   const names = [
@@ -122,15 +146,29 @@ test('diff excludes secrets in all layers', async (t) => {
 
     const diff = await inspect({ staged });
     assert.match(diff, /visible-change/);
-    assert.doesNotMatch(diff, /secret-sentinel/);
-    assert.doesNotMatch(
-      await inspect({ staged, path: '.env' }),
-      /secret-sentinel/,
-    );
+    assert.match(diff, /secret-sentinel/);
+    assert.match(await inspect({ staged, path: '.env' }), /secret-sentinel/);
   }
 
   await f.git('commit', '-m', 'Change fixture');
-  assert.doesNotMatch(await inspect({ base: 'HEAD~1' }), /secret-sentinel/);
+  assert.match(await inspect({ base: 'HEAD~1' }), /secret-sentinel/);
+  assert.match(
+    await repo.inspectRepository(f.repo, { operation: 'files' }),
+    /\.env/,
+  );
+  assert.match(
+    await repo.inspectRepository(f.repo, { operation: 'read', path: '.env' }),
+    /new-secret-sentinel/,
+  );
+  await f.write('.gitignore', 'ignored.txt\n');
+  await f.write('ignored.txt', 'ignored context fixture');
+  assert.match(
+    await repo.inspectRepository(f.repo, {
+      operation: 'read',
+      path: 'ignored.txt',
+    }),
+    /ignored context fixture/,
+  );
 });
 
 test('large index does not prevent listing or individual reads', async (t) => {

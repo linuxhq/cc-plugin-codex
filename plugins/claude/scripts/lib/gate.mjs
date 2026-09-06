@@ -1,7 +1,7 @@
 import { readGateConfig } from './gate-config.mjs';
-import { repositoryRoot } from './git.mjs';
+import { workspaceRoot } from './git.mjs';
 import { prepareJob } from './jobs.mjs';
-import { checkSetup } from './claude.mjs';
+import { checkAvailability } from './claude.mjs';
 import { active, sessionJobs } from './status.mjs';
 import { storeRoot } from './store.mjs';
 import { executeJob } from './worker.mjs';
@@ -12,17 +12,7 @@ export { gateFailure, parseGateOutput } from './gate-output.mjs';
 export async function runGate(input) {
   if (input.hook_event_name !== 'Stop') return {};
 
-  let repo;
-  try {
-    repo = await repositoryRoot(input.cwd || process.cwd());
-  } catch {
-    return {
-      systemMessage:
-        'Claude review gate skipped: the working directory is not ' +
-        'an accessible Git checkout.',
-    };
-  }
-
+  const repo = await workspaceRoot(input.cwd || process.cwd());
   const root = storeRoot(repo);
   const running = (await sessionJobs(root, input.session_id || undefined)).find(
     active,
@@ -31,14 +21,7 @@ export async function runGate(input) {
     ? `Claude job ${running.id} is still running. ` +
       `Check $claude:status or use $claude:cancel ${running.id}.`
     : '';
-  let config;
-  try {
-    config = await readGateConfig(root);
-  } catch (error) {
-    return gateFailure(
-      `Cannot read review gate configuration: ${error.message}`,
-    );
-  }
+  const config = await readGateConfig(root);
 
   if (!config.enabled) return note ? { systemMessage: note } : {};
 
@@ -47,7 +30,7 @@ export async function runGate(input) {
 
 async function enabledGate(repo, root, input) {
   try {
-    await checkSetup();
+    await checkAvailability();
   } catch {
     return {
       systemMessage:
@@ -55,7 +38,11 @@ async function enabledGate(repo, root, input) {
     };
   }
 
-  return reviewResponse(repo, root, input);
+  try {
+    return await reviewResponse(repo, root, input);
+  } catch (error) {
+    return gateFailure(error.message);
+  }
 }
 
 function withNote(decision, note) {

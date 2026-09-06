@@ -1,38 +1,38 @@
+import { runProcess } from './process.mjs';
 import { checkSetup } from './claude.mjs';
 import { readGateConfig, writeGateConfig } from './gate-config.mjs';
-import { repositoryRoot } from './git.mjs';
+import { workspaceRoot } from './git.mjs';
 import { storeRoot } from './store.mjs';
 
 export async function setup(options) {
   const enable = options['enable-review-gate'];
   const disable = options['disable-review-gate'];
-  let repo = null;
-  try {
-    repo = await repositoryRoot(process.cwd());
-  } catch (error) {
-    if (enable || disable) throw error;
-  }
-
-  const root = repo ? storeRoot(repo) : null;
+  const repo = await workspaceRoot(process.cwd());
+  const root = storeRoot(repo);
   if (enable || disable) await writeGateConfig(root, Boolean(enable));
 
-  const readinessResult = await checkReadiness();
-  const { ready, readiness, missing = false } = readinessResult;
-  const gate = root ? await readGateConfig(root) : null;
-  const message = setupMessage(readiness, gate, repo);
-  return { ready, missing, workspaceRoot: repo, gate, message };
+  const [readinessResult, node, npm] = await Promise.all([
+    checkReadiness(),
+    binaryStatus('node'),
+    binaryStatus('npm'),
+  ]);
+  const { readiness, missing = false } = readinessResult;
+  const ready = readinessResult.ready && node.available;
+  const gate = await readGateConfig(root);
+  const message = setupMessage({ readiness, gate, repo, node, npm });
+  return { ready, missing, workspaceRoot: repo, node, npm, gate, message };
 }
 
-function setupMessage(readiness, gate, repo) {
+function setupMessage({ readiness, gate, repo, node, npm }) {
   const message = [
     readiness.trimEnd(),
-    gate
-      ? `Automatic review gate: ${gate.enabled ? 'enabled' : 'disabled'}` +
-        ` for ${repo}.`
-      : 'Review gate: run setup in a Git checkout to configure it.',
+    `node: ${node.available ? node.version : 'unavailable'}`,
+    `npm: ${npm.available ? npm.version : 'unavailable'}`,
+    `Automatic review gate: ${gate.enabled ? 'enabled' : 'disabled'}` +
+      ` for ${repo}.`,
     ...(gate?.enabled
       ? [
-          'Trust the Stop hook in /hooks; ' +
+          'Trust the plugin hooks in /hooks; ' +
             'start a new session after installing or updating the plugin.',
         ]
       : []),
@@ -46,12 +46,21 @@ async function checkReadiness() {
   } catch (error) {
     return {
       ready: false,
-      missing: error.code === 'ENOENT',
+      missing: ['ENOENT', 'CLAUDE_UNAVAILABLE'].includes(error.code),
       readiness:
         error.code === 'ENOENT'
           ? 'Claude is unavailable. Install Claude Code: ' +
             'https://code.claude.com/docs/en/setup.'
           : error.message,
     };
+  }
+}
+
+async function binaryStatus(command) {
+  try {
+    const result = await runProcess(command, ['--version']);
+    return { available: result.code === 0, version: result.stdout.trim() };
+  } catch {
+    return { available: false };
   }
 }

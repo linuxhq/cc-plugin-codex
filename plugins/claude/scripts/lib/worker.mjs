@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 import { reviewWithClaude, validatePrompt } from './claude.mjs';
 import { exists, jobPath, loadJob, saveJob, terminalStates } from './store.mjs';
 import { saveProgress, updateProgress } from './progress.mjs';
@@ -48,9 +48,25 @@ export async function executeJob(root, id, { prompt } = {}) {
   job.elapsedMs =
     Date.parse(job.finishedAt) - Date.parse(job.startedAt || job.createdAt);
   discardPrompt(job);
-  job.progress = { ...progress, phase: job.state };
+  job.progress = updateProgress(progress, {
+    phase: job.state === 'completed' ? 'done' : job.state,
+    summary: finalSummary(job),
+  });
   await saveJob(root, job);
+  if (await exists(jobPath(root, id, 'session-ended')))
+    await rm(jobPath(root, id, '.'), { recursive: true, force: true });
+
   return job;
+}
+
+function finalSummary(job) {
+  const output =
+    job.state === 'completed'
+      ? job.structuredOutput?.summary || job.rawOutput || job.output
+      : job.error;
+  return String(output || job.state)
+    .split(/\r?\n/)
+    .find((line) => line.trim());
 }
 
 function monitor(root, id, controller, progress) {

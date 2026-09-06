@@ -1,74 +1,37 @@
-import { sensitive } from './repository-policy.mjs';
-import { isAbsolute, relative, resolve } from 'node:path';
-import { constants } from 'node:fs';
-import { open, readdir, realpath, lstat } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { extname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { readFile, readdir, realpath } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { currentSessionId } from './status.mjs';
 
-const maxBytes = 8 * 1024 * 1024;
-
 export async function readContextFile(path, repo = process.cwd()) {
-  if (sensitive.test(resolve(path)))
-    throw new Error('Sensitive context paths are not allowed.');
+  const requested = path.startsWith('~/')
+    ? join(homedir(), path.slice(2))
+    : resolve(repo, path);
+  if (extname(requested) !== '.jsonl')
+    throw new Error('Codex session source must be a JSONL file.');
 
-  const canonical = await realpath(path);
-  if (sensitive.test(canonical))
-    throw new Error('Sensitive context paths are not allowed.');
-
+  const canonical = await realpath(requested);
+  const home = process.env.CODEX_HOME || join(homedir(), '.codex');
   const roots = await Promise.all(
-    [repo, tmpdir(), process.env.CODEX_HOME || join(homedir(), '.codex')].map(
-      (root) => realpath(root).catch(() => resolve(root)),
+    [join(home, 'sessions'), join(home, 'archived_sessions')].map((root) =>
+      realpath(root).catch(() => resolve(root)),
     ),
   );
   if (
     !roots.some((root) => {
       const rel = relative(root, canonical);
       return (
-        rel &&
-        rel !== '..' &&
-        !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) &&
-        !isAbsolute(rel)
+        rel && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)
       );
     })
   )
     throw new Error(
-      'Context must be inside the checkout, temporary ' +
-        'directory, or CODEX_HOME. Copy an intended summary there first.',
+      'Transfer source must be inside CODEX_HOME/sessions or ' +
+        'CODEX_HOME/archived_sessions.',
     );
 
-  if ((await lstat(path)).isSymbolicLink())
-    throw new Error('Symlink context inputs are not allowed.');
-
-  const file = await open(
-    canonical,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const info = await file.stat();
-    if (!info.isFile() || info.size > maxBytes)
-      throw new Error('Context must be a regular file of at most 8 MiB.');
-
-    const buffer = Buffer.alloc(maxBytes + 1);
-    let length = 0;
-    while (length < buffer.length) {
-      const { bytesRead } = await file.read(
-        buffer,
-        length,
-        buffer.length - length,
-        null,
-      );
-      if (!bytesRead) break;
-
-      length += bytesRead;
-    }
-
-    if (length > maxBytes) throw new Error('Context exceeds 8 MiB.');
-
-    return buffer.subarray(0, length).toString('utf8');
-  } finally {
-    await file.close();
-  }
+  return readFile(canonical, 'utf8');
 }
 
 export async function transferContext(options, repo = process.cwd()) {

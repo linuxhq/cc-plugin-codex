@@ -5,17 +5,9 @@ import { join } from 'node:path';
 export async function readGateConfig(root) {
   try {
     const config = JSON.parse(await readFile(join(root, 'gate.json'), 'utf8'));
-    if (typeof config?.enabled !== 'boolean')
-      throw new Error(
-        'Invalid review gate configuration. ' +
-          'Run $claude:setup --disable-review-gate to reset it.',
-      );
-
-    return config;
-  } catch (error) {
-    if (error.code === 'ENOENT') return { enabled: false };
-
-    throw error;
+    return { enabled: Boolean(config?.enabled) };
+  } catch {
+    return { enabled: false };
   }
 }
 

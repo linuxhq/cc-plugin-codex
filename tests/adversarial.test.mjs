@@ -71,6 +71,13 @@ test('renders an empty review without invented findings', () => {
   );
 });
 
+test('malformed output preserves upstream parse diagnostics', () => {
+  const output = adversarial.renderAdversarial('not JSON', {});
+  assert.match(output, /did not return valid structured JSON/);
+  assert.match(output, /Parse error:/);
+  assert.match(output, /Raw final message:\n\n```text\nnot JSON/);
+});
+
 for (const change of [
   { severity: 'urgent' },
   { confidence: 2 },
@@ -80,17 +87,15 @@ for (const change of [
   { recommendation: null },
   { extra: true },
 ]) {
-  test(`rejects invalid finding fields: ${JSON.stringify(change)}`, () => {
-    assert.throws(
-      () =>
-        adversarial.renderAdversarial(
-          JSON.stringify({
-            ...review,
-            findings: [{ ...finding, ...change }],
-          }),
-          {},
-        ),
-      /valid structured JSON/,
+  test(`normalizes finding: ${JSON.stringify(change)}`, () => {
+    const output = adversarial.renderAdversarial(
+      JSON.stringify({
+        ...review,
+        findings: [{ ...finding, ...change }],
+      }),
+      {},
     );
+    assert.match(output, /Retries can lose data/);
+    assert.match(output, /Preserve records/);
   });
 }

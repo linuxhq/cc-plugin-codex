@@ -1,7 +1,7 @@
 import { readFile, rm } from 'node:fs/promises';
 import { executeJob } from './lib/worker.mjs';
 import { validatePrompt } from './lib/claude.mjs';
-import { jobPath, loadJob, saveJob } from './lib/store.mjs';
+import { exists, jobPath, loadJob, saveJob } from './lib/store.mjs';
 
 const [root, id] = process.argv.slice(2);
 try {
@@ -32,4 +32,7 @@ try {
 
   console.error(message);
   process.exitCode = 1;
+} finally {
+  if (await exists(jobPath(root, id, 'session-ended')))
+    await rm(jobPath(root, id, '.'), { recursive: true, force: true });
 }

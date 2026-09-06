@@ -1,4 +1,4 @@
-import { parseArgs } from 'node:util';
+import { parseArgs as parseNodeArgs } from 'node:util';
 
 const reviewCommands = ['review', 'adversarial-review'];
 const jobCommands = ['status', 'result', 'cancel'];
@@ -51,26 +51,59 @@ function parseJob(command, args) {
   if (values.wait && !positionals[0])
     throw new Error('status --wait requires a job ID.');
 
-  for (const key of ['timeout-ms', 'poll-interval-ms']) {
-    if (values[key] === undefined) continue;
-
-    if (!values.wait) throw new Error(`--${key} requires --wait.`);
-
-    const number = Number(values[key]);
-    if (!/^\d+$/.test(values[key]) || !Number.isSafeInteger(number))
-      throw new Error(`--${key} must be a nonnegative integer.`);
-
-    if (key === 'poll-interval-ms' && number < 100)
-      throw new Error('--poll-interval-ms must be at least 100.');
-
-    values[key] = number;
-  }
-
   return {
     command,
     ...values,
     id: positionals[0],
   };
+}
+
+function parseArgs({ args, options, ...config }) {
+  const normalized = [];
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    if (token === '--') {
+      normalized.push(...args.slice(index));
+      break;
+    }
+
+    const key = token.startsWith('--')
+      ? token.slice(2).split('=')[0]
+      : Object.keys(options).find(
+          (name) => options[name].short && token === `-${options[name].short}`,
+        );
+    const option = options[key];
+    if (option && !token.includes('=')) {
+      if (option.type === 'boolean') normalized.push(`--${key}=true`);
+      else if (args[index + 1] !== undefined)
+        normalized.push(`--${key}=${args[++index]}`);
+      else normalized.push(token);
+    } else normalized.push(token);
+  }
+
+  const stringOptions = Object.fromEntries(
+    Object.entries(options).map(([key, option]) => [
+      key,
+      {
+        ...option,
+        type: 'string',
+        ...(option.default !== undefined
+          ? { default: String(option.default) }
+          : {}),
+      },
+    ]),
+  );
+  const parsed = parseNodeArgs({
+    ...config,
+    args: normalized,
+    options: stringOptions,
+  });
+  for (const key of Object.keys(parsed.values)) {
+    if (options[key].type === 'boolean')
+      parsed.values[key] = parsed.values[key] !== 'false';
+  }
+
+  return parsed;
 }
 
 function validateCommon(values) {
@@ -117,6 +150,9 @@ function parseReview(command, args) {
 }
 
 function validateEffort(values) {
+  if (values.effort !== undefined)
+    values.effort = values.effort.trim().toLowerCase() || undefined;
+
   if (
     values.effort !== undefined &&
     !['low', 'medium', 'high', 'xhigh', 'max'].includes(values.effort)
@@ -136,7 +172,7 @@ function parseTransfer(args) {
     options: { ...commonOptions, source: { type: 'string' } },
   });
   validateCommon(values);
-  validateTaskOptions(values, []);
+  validateTaskOptions(values);
   return { command: 'transfer', ...values };
 }
 
@@ -159,12 +195,13 @@ function parseTask(args) {
   });
   validateCommon(values);
   validateEffort(values);
-  validateTaskOptions(values, positionals);
+  validateTaskOptions(values);
   return { command: 'rescue', ...values, focus: positionals.join(' ') };
 }
 
-function validateTaskOptions(values, positionals) {
-  for (const key of ['model', 'prompt-file', 'source']) {
+function validateTaskOptions(values) {
+  normalizeModel(values);
+  for (const key of ['prompt-file', 'source']) {
     if (values[key] !== undefined && !values[key].trim())
       throw new Error(`--${key} cannot be empty.`);
   }
@@ -174,24 +211,25 @@ function validateTaskOptions(values, positionals) {
 
   if (values.fresh && (values.resume || values['resume-last']))
     throw new Error('Choose --fresh or a resume option.');
-
-  if (values['prompt-file'] && (positionals.length || values.source))
-    throw new Error('Use --prompt-file without task text or --source.');
 }
 
 function validateScope(values) {
-  for (const key of ['base', 'model']) {
-    if (values[key] !== undefined && !values[key].trim()) {
-      throw new Error(`--${key} cannot be empty.`);
-    }
-  }
+  normalizeModel(values);
 
   if (values.wait && values.background)
     throw new Error('Choose --wait or --background.');
 
-  if (!['auto', 'working-tree', 'branch'].includes(values.scope)) {
+  if (
+    !values.base &&
+    !['auto', 'working-tree', 'branch'].includes(values.scope)
+  ) {
     throw new Error('Scope must be auto, working-tree, or branch.');
   }
+}
+
+function normalizeModel(values) {
+  if (values.model !== undefined)
+    values.model = values.model.trim() || undefined;
 }
 
 export const help = `Claude review plugin for Codex
@@ -208,9 +246,11 @@ result [JOB_ID]
 cancel [JOB_ID]
 
 All commands accept --cwd PATH (-C) and --json (except help).
+Boolean flags accept explicit values; only =false disables a flag.
 Reviews and rescue accept --model MODEL (-m). Rescue accepts --effort LEVEL.
 Effort levels: low, medium, high, xhigh, max (model support varies).
 Rescue is read-only unless --write authorizes edits and sandboxed commands.
+Rescue reads piped stdin when no task text or --prompt-file is supplied.
 Resume continues the saved conversation; transfer seeds a persistent session.
 Defaults: foreground, Claude's configured defaults, auto scope.
 Auto reviews local changes when dirty, otherwise the branch against its base.

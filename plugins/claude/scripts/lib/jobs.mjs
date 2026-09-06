@@ -9,6 +9,7 @@ import { collectReview } from './git.mjs';
 import {
   active,
   currentSessionId,
+  jobSnapshot,
   sessionJobs,
   statusReport,
 } from './status.mjs';
@@ -23,7 +24,9 @@ import {
 
 export async function prepareJob(repo, root, options, target) {
   const persistent = persistentCommands.includes(options.command);
-  const task = persistent ? await prepareTask(root, options, repo) : null;
+  const task = ['rescue', 'transfer'].includes(options.command)
+    ? await prepareTask(root, options, process.cwd())
+    : null;
   target ??= persistent
     ? { scope: options.command }
     : await collectReview(repo, options);
@@ -38,8 +41,8 @@ export async function prepareJob(repo, root, options, target) {
     ...(persistent
       ? {
           write: Boolean(options.write),
-          resumeSessionId: task.resumeSessionId,
-          requestedSessionId: task.resumeSessionId ? undefined : randomUUID(),
+          resumeSessionId: task?.resumeSessionId,
+          requestedSessionId: task?.resumeSessionId ? undefined : randomUUID(),
         }
       : {}),
     target: {
@@ -87,12 +90,22 @@ export async function selectJob(root, id) {
 
 export async function selectResultJob(root, id) {
   if (id) {
-    const job = await selectJob(root, id);
-    const state = await jobState(root, job);
-    if (active({ state }))
-      throw new Error(`Job ${id} is still ${state}. Check $claude:status.`);
+    const snapshots = await sessionJobs(root, null);
+    const finishedIds = new Set(
+      snapshots.filter((job) => !active(job)).map((job) => job.id),
+    );
+    try {
+      return await resolveJob(root, id, (job) => finishedIds.has(job.id));
+    } catch (error) {
+      if (!error.message.startsWith('Job not found')) throw error;
+    }
 
-    return job;
+    const activeIds = new Set(snapshots.filter(active).map((job) => job.id));
+    const job = await resolveJob(root, id, (job) => activeIds.has(job.id));
+    throw new Error(
+      `Job ${job.id} is still ${job.state}. ` +
+        'Check $claude:status and try again once it finishes.',
+    );
   }
 
   const jobs = await sessionJobs(root);
@@ -110,11 +123,16 @@ export async function selectResultJob(root, id) {
 
 export async function selectCancelableJob(root, id) {
   if (id) {
-    const job = await selectJob(root, id);
-    const state = await jobState(root, job);
-    if (!active({ state })) throw new Error(`No active job found for ${id}.`);
+    const snapshots = await sessionJobs(root, null);
+    const activeIds = new Set(snapshots.filter(active).map((job) => job.id));
+    try {
+      return await resolveJob(root, id, (job) => activeIds.has(job.id));
+    } catch (error) {
+      if (error.message.startsWith('Job not found'))
+        throw new Error(`No active job found for ${id}.`, { cause: error });
 
-    return job;
+      throw error;
+    }
   }
 
   const jobs = (await sessionJobs(root)).filter(active);
@@ -149,12 +167,18 @@ export async function cancelJob(root, id) {
 }
 
 export async function result(root, id) {
-  const job = await selectResultJob(root, id);
+  const job = await jobSnapshot(root, await selectResultJob(root, id));
   const state = await jobState(root, job);
+  const continuation = job.claudeSessionId
+    ? `\nClaude session: ${job.claudeSessionId}\n` +
+      `Continue: claude --resume ${job.claudeSessionId}`
+    : '';
   if (state !== 'completed') {
     return {
       text:
         `${job.id}: ${state}${job.error ? `\n${job.error}` : ''}` +
+        (job.rawOutput ? `\n\n${job.rawOutput}` : '') +
+        continuation +
         (job.write
           ? '\nWrite job may have left partial edits. ' +
             'Inspect the working tree before continuing.'
@@ -167,10 +191,6 @@ export async function result(root, id) {
     job.command === 'stop-review-gate'
       ? renderGateResult(job.output)
       : job.output;
-  const continuation = job.claudeSessionId
-    ? `\nClaude session: ${job.claudeSessionId}\n` +
-      `Continue: claude --resume ${job.claudeSessionId}`
-    : '';
   return {
     text:
       output +
