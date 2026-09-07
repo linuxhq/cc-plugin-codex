@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { writeFile, rename } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 
@@ -31,10 +31,13 @@ if (args[0] === '--version') {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
 
+  const capture = process.env.FAKE_CLAUDE_CAPTURE;
+  const temporary = `${capture}.${process.pid}.tmp`;
   await writeFile(
-    process.env.FAKE_CLAUDE_CAPTURE,
+    temporary,
     JSON.stringify({ args, input, cwd: process.cwd(), pid: process.pid }),
   );
+  await rename(temporary, capture);
   const sessionId =
     mode === 'missing-session'
       ? undefined

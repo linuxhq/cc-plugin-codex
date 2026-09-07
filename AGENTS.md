@@ -30,3 +30,9 @@ Use `padding-line-between-statements` for blank lines after control-flow blocks,
 keeping `else`, `catch`, and `finally` attached. Let Prettier handle other
 formatting. Fix failures instead of disabling checks. Tests use the fake Claude
 CLI and should not consume Claude usage.
+
+# Releases
+
+Follow the [release](.agents/skills/release/SKILL.md) skill for version bumps
+and releases. Publish only after all GitHub CI for the exact release commit,
+including branch and tag workflows and every matrix job, passes.

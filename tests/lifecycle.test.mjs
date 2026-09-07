@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, readFile, utimes } from 'node:fs/promises';
+import { access, readFile, utimes, writeFile, mkdir } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,14 +22,102 @@ const hook = fileURLToPath(
   ),
 );
 
+for (const failure of ['ENOENT', 'EISDIR']) {
+  test(`cleanup continues after ${failure}`, async (t) => {
+    const f = await fixture(t);
+    const root = join(
+      f.env.CLAUDE_REVIEW_DATA_DIR,
+      'jobs',
+      fingerprint(f.repo).slice(0, 24),
+    );
+    const remaining = await createJob(root, {
+      repo: f.repo,
+      sessionId: 'test-session',
+    });
+    await saveJob(root, { ...remaining, createdAt: new Date(0).toISOString() });
+    const failing = await createJob(root, {
+      repo: f.repo,
+      sessionId: 'test-session',
+    });
+    const preload = join(f.root, 'race.mjs');
+    const marker = jobPath(root, failing.id, 'session-ended');
+    const directory = jobPath(root, failing.id, '.');
+    const remove =
+      failure === 'ENOENT'
+        ? `await fs.rm(${JSON.stringify(directory)}, options);`
+        : '';
+    await writeFile(
+      preload,
+      `
+      import fs from 'node:fs/promises';
+      import { syncBuiltinESMExports } from 'node:module';
+      const write = fs.writeFile;
+      const options = { recursive: true, force: true };
+      fs.writeFile = async (path, ...args) => {
+        if (path === ${JSON.stringify(marker)}) {
+          ${remove}
+        }
+        return write(path, ...args);
+      };
+      syncBuiltinESMExports();
+    `,
+    );
+    if (failure === 'EISDIR')
+      await mkdir(jobPath(root, failing.id, 'session-ended'));
+
+    const run = await runProcess(
+      process.execPath,
+      ['--import', preload, hook, 'SessionEnd'],
+      {
+        cwd: f.repo,
+        env: f.env,
+        input: JSON.stringify({ cwd: f.repo, session_id: 'test-session' }),
+      },
+    );
+    assert.equal(run.code, failure === 'ENOENT' ? 0 : 1, run.stderr);
+    await access(jobPath(root, remaining.id, 'session-ended'));
+    await access(jobPath(root, remaining.id, 'cancel'));
+  });
+}
+
+test('session end removes records of workers that exited', async (t) => {
+  const f = await fixture(t);
+  const root = join(
+    f.env.CLAUDE_REVIEW_DATA_DIR,
+    'jobs',
+    fingerprint(f.repo).slice(0, 24),
+  );
+  const job = await createJob(root, {
+    repo: f.repo,
+    sessionId: 'test-session',
+  });
+  const worker = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise((resolve) => worker.once('exit', resolve));
+  await writeFile(jobPath(root, job.id, 'worker-pid'), String(worker.pid));
+  const run = await runProcess(process.execPath, [hook, 'SessionEnd'], {
+    cwd: f.repo,
+    env: f.env,
+    input: JSON.stringify({ cwd: f.repo, session_id: 'test-session' }),
+  });
+  assert.equal(run.code, 0, run.stderr);
+  await assert.rejects(access(jobPath(root, job.id)), { code: 'ENOENT' });
+});
+
 test('paused workers survive pruning and finish session cleanup', async (t) => {
   const f = await fixture(t);
   const worker = spawn(process.execPath, [cli, 'rescue', 'inspect'], {
     cwd: f.repo,
     env: { ...f.env, FAKE_CLAUDE_MODE: 'slow' },
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const exited = new Promise((resolve) => worker.once('exit', resolve));
+  let output = '';
+  worker.stdout.on('data', (chunk) => {
+    output += chunk;
+  });
+  worker.stderr.on('data', (chunk) => {
+    output += chunk;
+  });
+  const exited = new Promise((resolve) => worker.once('close', resolve));
   f.cleanup(async () => {
     worker.kill('SIGCONT');
     worker.kill('SIGTERM');
@@ -67,7 +155,11 @@ test('paused workers survive pruning and finish session cleanup', async (t) => {
   await access(jobPath(root, job.id, 'cancel'));
   worker.kill('SIGCONT');
   await exited;
-  await assert.rejects(access(jobPath(root, job.id)), { code: 'ENOENT' });
+  await assert.rejects(
+    access(jobPath(root, job.id)),
+    { code: 'ENOENT' },
+    output,
+  );
 });
 
 test('session end cleans up its own jobs', async (t) => {

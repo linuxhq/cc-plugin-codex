@@ -74,6 +74,9 @@ export async function launchBackground(root, job) {
       child.once('error', reject);
       child.once('spawn', resolve);
     });
+    await writeFile(jobPath(root, job.id, 'worker-pid'), String(child.pid), {
+      mode: 0o600,
+    });
     child.unref();
   } catch (error) {
     await rm(payload, { force: true });

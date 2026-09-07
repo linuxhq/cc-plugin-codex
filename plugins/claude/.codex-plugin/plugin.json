@@ -1,6 +1,6 @@
 {
   "name": "claude",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Claude reviews, delegated fixes, and session handoffs from Codex.",
   "author": {
     "name": "linuxhq"

@@ -5,6 +5,45 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { eventually } from './helpers.mjs';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+test('supervisor escalates direct SIGTERM', async (t) => {
+  const supervisor = fileURLToPath(
+    new URL(
+      '../plugins/claude/scripts/process-supervisor.mjs',
+      import.meta.url,
+    ),
+  );
+  const child = spawn(
+    process.execPath,
+    [
+      supervisor,
+      process.execPath,
+      '-e',
+      `process.on('SIGTERM', () => {});
+       console.log('ready');
+       setInterval(() => {}, 100);`,
+    ],
+    { detached: true, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] },
+  );
+  const exited = new Promise((resolve) =>
+    child.once('exit', (code, signal) => resolve({ code, signal })),
+  );
+  t.after(async () => {
+    try {
+      process.kill(-child.pid, 'SIGKILL');
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+
+    await exited;
+  });
+  await new Promise((resolve) => child.stdout.once('data', resolve));
+  child.kill('SIGTERM');
+  await eventually(() => child.signalCode !== null || child.exitCode !== null);
+  assert.equal((await exited).signal, 'SIGKILL');
+});
 
 test('cancellation stops descendants after their parent exits', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'claude-cancel-test-'));

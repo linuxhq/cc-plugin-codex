@@ -1,10 +1,13 @@
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { executeJob } from './lib/worker.mjs';
 import { validatePrompt } from './lib/claude.mjs';
 import { exists, jobPath, loadJob, saveJob } from './lib/store.mjs';
 
 const [root, id] = process.argv.slice(2);
 try {
+  await writeFile(jobPath(root, id, 'worker-pid'), String(process.pid), {
+    mode: 0o600,
+  });
   const path = jobPath(root, id, 'prompt.json');
   let prompt;
   try {

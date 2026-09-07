@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
+import { spawn } from 'node:child_process';
 import {
   createJob,
   jobPath,
@@ -35,6 +36,48 @@ test('full active budget retains the latest result', async (t) => {
   await pruneJobs(root, { maxCount: 1 });
   assert.equal((await loadJob(root, active.id)).state, 'queued');
   assert.equal((await loadJob(root, completed.id)).state, 'completed');
+});
+
+test('dead workers share the bounded history budget', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const worker = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise((resolve) => worker.once('exit', resolve));
+  const dead = [];
+  for (let i = 0; i < 50; i++) {
+    const job = await createJob(root, { repo: f.repo });
+    await writeFile(jobPath(root, job.id, 'worker-pid'), String(worker.pid));
+    await saveJob(root, { ...job, createdAt: new Date(i).toISOString() });
+    dead.push(job);
+  }
+
+  const completed = [];
+  for (let i = 0; i < 3; i++) {
+    const job = await createJob(root, { repo: f.repo });
+    await saveJob(root, { ...job, state: 'completed' });
+    completed.push(job);
+  }
+
+  const retained = await listJobs(root);
+  assert.equal(retained.length, 50);
+  for (const job of completed)
+    assert.ok(retained.some((entry) => entry.id === job.id));
+
+  await assert.rejects(loadJob(root, dead[0].id), /Job not found/);
+});
+
+test('stale workers do not crowd out results', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const paused = await createJob(root, { repo: f.repo });
+  await saveJob(root, { ...paused, createdAt: new Date(0).toISOString() });
+  for (let i = 0; i < 2; i++) {
+    const job = await createJob(root, { repo: f.repo });
+    await saveJob(root, { ...job, state: 'completed' });
+  }
+
+  await pruneJobs(root, { maxCount: 2 });
+  assert.equal((await listJobs(root)).length, 3);
 });
 
 test('heartbeats distinguish stale jobs from active jobs', async (t) => {

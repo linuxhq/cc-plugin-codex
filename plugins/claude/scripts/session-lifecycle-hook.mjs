@@ -9,6 +9,7 @@ import {
   loadJob,
   storeRoot,
   terminalStates,
+  workerExited,
 } from './lib/store.mjs';
 
 async function main() {
@@ -26,12 +27,19 @@ async function main() {
   for (const job of await listJobs(root)) {
     if (job.sessionId !== sessionId) continue;
 
-    await cleanupJob(root, job);
+    try {
+      await cleanupJob(root, job);
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+
+      console.error(error.message);
+      process.exitCode = 1;
+    }
   }
 }
 
 async function cleanupJob(root, job) {
-  if (terminalStates.includes(job.state)) {
+  if (terminalStates.includes(job.state) || (await workerExited(root, job))) {
     await rm(jobPath(root, job.id, '.'), { recursive: true, force: true });
   } else {
     // The worker owns its child process and removes its records after stopping.

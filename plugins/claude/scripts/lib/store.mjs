@@ -48,6 +48,9 @@ export async function createJob(root, details) {
     createdAt: new Date().toISOString(),
   };
   await mkdir(join(root, job.id), { recursive: true, mode: 0o700 });
+  await writeFile(jobPath(root, job.id, 'worker-pid'), String(process.pid), {
+    mode: 0o600,
+  });
   await saveJob(root, job);
   await pruneJobs(root);
   return job;
@@ -146,13 +149,46 @@ export async function jobState(root, job) {
 // Active worker records must remain available for cancellation and completion.
 export async function pruneJobs(root, { maxCount = 50 } = {}) {
   const jobs = await listJobs(root);
-  const finished = jobs
-    .filter((job) => terminalStates.includes(job.state))
-    .sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
-  const finishedLimit = Math.max(1, maxCount - (jobs.length - finished.length));
+  const finished = [];
+  let activeCount = 0;
+  for (const job of jobs) {
+    if (terminalStates.includes(job.state)) finished.push(job);
+    else if ((await jobState(root, job)) === 'interrupted') {
+      if (await workerExited(root, job)) finished.push(job);
+    } else activeCount++;
+  }
+
+  finished.sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
+  const finishedLimit = Math.max(1, maxCount - activeCount);
   for (const [index, job] of finished.entries()) {
     if (index >= finishedLimit)
       await rm(join(root, job.id), { recursive: true, force: true });
+  }
+}
+
+// PID reuse or inaccessible processes conservatively retain the record.
+// Never signal a process using a persisted PID; signal 0 only probes existence.
+export async function workerExited(root, job) {
+  let pid;
+  try {
+    pid = Number(await readFile(jobPath(root, job.id, 'worker-pid'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+
+    throw error;
+  }
+
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    if (error.code === 'ESRCH') return true;
+
+    if (error.code === 'EPERM') return false;
+
+    throw error;
   }
 }
 

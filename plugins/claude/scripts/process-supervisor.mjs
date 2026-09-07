@@ -4,10 +4,13 @@ import { spawn } from 'node:child_process';
 // when the worker is killed with SIGKILL, where exit handlers cannot run.
 const [command, ...args] = process.argv.slice(2);
 let stopping = false;
-// Keep the group leader alive until runProcess escalates to SIGKILL, even if
-// Claude exits first and a descendant has redirected its output.
+// Keep the group leader alive to kill descendants even if Claude exits first.
+// Give runProcess its one-second escalation window, then act independently.
 process.on('SIGTERM', () => {
+  if (stopping) return;
+
   stopping = true;
+  setTimeout(disconnected, 2000);
 });
 const child = spawn(command, args, { stdio: ['pipe', 'inherit', 'inherit'] });
 process.stdin.pipe(child.stdin);
@@ -24,9 +27,9 @@ child.once('error', (error) => {
   if (process.connected) process.disconnect();
 });
 child.once('close', (code) => {
+  process.exitCode = code ?? 1;
   if (stopping) return;
 
   process.removeListener('disconnect', disconnected);
-  process.exitCode = code ?? 1;
   if (process.connected) process.disconnect();
 });
