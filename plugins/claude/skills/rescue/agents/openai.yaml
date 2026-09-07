@@ -1,0 +1,4 @@
+interface:
+  display_name: 'rescue'
+  short_description: >-
+    Args: [task ...], --write, --resume, --fresh, --background

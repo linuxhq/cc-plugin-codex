@@ -1,6 +1,6 @@
 ---
 name: status
-description:
+description: >-
   Show active and recent Claude jobs for this repository, including review-gate
   status
 ---

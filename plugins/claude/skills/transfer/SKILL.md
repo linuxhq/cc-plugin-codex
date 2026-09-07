@@ -1,6 +1,6 @@
 ---
 name: transfer
-description:
+description: >-
   Hand off the current Codex conversation to a persistent Claude session for
   continuation in Claude Code.
 ---

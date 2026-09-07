@@ -1,3 +1,4 @@
 interface:
-  display_name: 'Claude Setup'
-  short_description: 'Args: --enable-review-gate, --disable-review-gate'
+  display_name: 'setup'
+  short_description: >-
+    Args: --enable-review-gate, --disable-review-gate

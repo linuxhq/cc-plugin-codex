@@ -1,6 +1,6 @@
 ---
 name: adversarial-review
-description:
+description: >-
   Run a Claude review that challenges the implementation approach and design
   choices
 ---

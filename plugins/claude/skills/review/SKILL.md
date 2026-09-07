@@ -1,6 +1,7 @@
 ---
 name: review
-description: Run a Claude code review against local git state
+description: >-
+  Run a Claude code review against local git state
 ---
 
 Run a Claude review through the shared Claude reviewer.

@@ -1,6 +1,6 @@
 ---
 name: rescue
-description:
+description: >-
   Delegate investigation, an authorized fix, or follow-up work to Claude from
   Codex.
 ---

@@ -1,6 +1,6 @@
 interface:
-  display_name: 'Claude Adversarial Review'
-  short_description:
-    'Args: [focus ...], --base REF, --scope SCOPE, --background'
+  display_name: 'adversarial-review'
+  short_description: >-
+    Args: [focus ...], --base REF, --scope SCOPE, --background
 policy:
   allow_implicit_invocation: false

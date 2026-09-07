@@ -1,5 +1,6 @@
 interface:
-  display_name: 'Claude Status'
-  short_description: 'Args: [job-id], --wait, --timeout-ms MS, --all'
+  display_name: 'status'
+  short_description: >-
+    Args: [job-id], --wait, --timeout-ms MS, --all
 policy:
   allow_implicit_invocation: false

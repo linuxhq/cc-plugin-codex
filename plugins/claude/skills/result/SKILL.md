@@ -1,6 +1,6 @@
 ---
 name: result
-description:
+description: >-
   Show the stored final output for a finished Claude job in this repository
 ---
 
