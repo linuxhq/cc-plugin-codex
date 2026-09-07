@@ -35,6 +35,8 @@ const output = Promise.all([
   forwardUntilBoundary(child.stdout, process.stdout, marker),
   forwardUntilBoundary(child.stderr, process.stderr, marker),
 ]);
+// A broken output stream must stop the group even while the runner is alive.
+output.catch(stop);
 const result = new Promise((resolve) => {
   let received = false;
   child.once('message', (message) => {

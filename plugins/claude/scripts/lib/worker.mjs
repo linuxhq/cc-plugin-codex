@@ -85,8 +85,8 @@ async function runJob(root, id, { prompt, stderr = false }) {
     phase: job.state === 'completed' ? 'done' : job.state,
     summary: finalSummary(job),
   });
-  appendFinalOutput(root, job);
   await saveJob(root, job);
+  appendFinalOutput(root, job);
   return job;
 }
 

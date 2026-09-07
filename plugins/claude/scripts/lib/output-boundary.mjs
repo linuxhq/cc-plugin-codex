@@ -1,8 +1,19 @@
 // Forward output through the ordered boundary, then drain surviving helpers.
 export function forwardUntilBoundary(source, destination, marker) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     let pending = '';
     let complete = false;
+    const fail = (error) => {
+      if (complete) return;
+
+      complete = true;
+      reject(error);
+    };
+    const interrupted = () =>
+      fail(new Error('Output stream ended before its completion boundary.'));
+    source.once('end', interrupted);
+    source.once('close', interrupted);
+    source.on('error', fail);
     source.setEncoding('utf8').on('data', (chunk) => {
       if (complete) return;
 

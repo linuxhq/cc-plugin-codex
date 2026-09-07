@@ -14,6 +14,93 @@ import {
 import { fixture, extractId, eventually, cli } from './helpers.mjs';
 import { spawn } from 'node:child_process';
 
+for (const failure of ['end', 'error']) {
+  test(`supervisor stops retained helpers on output ${failure}`, async (t) => {
+    const f = await fixture(t);
+    const preload = join(f.root, 'break-boundary.mjs');
+    const activity = join(f.root, 'helper.json');
+    await writeFile(
+      preload,
+      `
+      import cp from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      const { spawn } = cp;
+      cp.spawn = (...args) => {
+        const child = spawn(...args);
+        if (args[1]?.[0]?.endsWith('/process-runner.mjs')) {
+          const stream = child.stdout;
+          const { emit } = stream;
+          stream.emit = (event, ...values) => {
+            if (event === 'data' && String(values[0]).includes('\\0')) {
+              return emit.call(stream,
+                ${JSON.stringify(failure)}, new Error('Broken output pipe'));
+            }
+            return emit.call(stream, event, ...values);
+          };
+        }
+        return child;
+      };
+      syncBuiltinESMExports();
+    `,
+    );
+    f.cleanup(async () => {
+      const helper = JSON.parse(await readFile(activity, 'utf8'));
+      try {
+        process.kill(helper.pid, 'SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+    });
+    const response = await f.run(
+      ['review', '--scope', 'working-tree', '--json'],
+      {
+        NODE_OPTIONS: `--import=${preload}`,
+        FAKE_CLAUDE_HELPER_ACTIVITY: activity,
+        FAKE_CLAUDE_HELPER_STDIO: 'both',
+      },
+    );
+    assert.equal(response.code, 1, response.stdout + response.stderr);
+    assert.doesNotMatch(response.stderr, /timed out/);
+    const report = JSON.parse(response.stdout);
+    assert.equal(report.job.state, 'failed');
+    const stopped = await readFile(activity, 'utf8');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(await readFile(activity, 'utf8'), stopped);
+  });
+}
+
+test('final log failure preserves the completed result', async (t) => {
+  const f = await fixture(t);
+  const preload = join(f.root, 'fail-final-log.mjs');
+  await writeFile(
+    preload,
+    `
+    import fs from 'node:fs';
+    import { syncBuiltinESMExports } from 'node:module';
+    const { appendFileSync } = fs;
+    fs.appendFileSync = (path, data, ...args) => {
+      if (String(path).endsWith('/worker.log') &&
+          data.includes('Final output\\n')) {
+        throw new Error('Injected final log failure');
+      }
+      return appendFileSync(path, data, ...args);
+    };
+    syncBuiltinESMExports();
+  `,
+  );
+  const response = await f.run(['review', '--scope', 'working-tree'], {
+    NODE_OPTIONS: `--import=${preload}`,
+  });
+  assert.notEqual(response.code, 0);
+  assert.match(response.stderr, /Injected final log failure/);
+  const result = await f.run(['result', '--json']);
+  assert.equal(result.code, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.job.state, 'completed');
+  assert.ok(report.job.finishedAt);
+  assert.match(report.output, /Example finding/);
+});
+
 for (const mode of ['activity', 'fail']) {
   test(`session cleanup waits for finalized ${mode} output`, async (t) => {
     const f = await fixture(t);

@@ -10,6 +10,28 @@ import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 import * as boundary from '../plugins/claude/scripts/lib/output-boundary.mjs';
 
+for (const failure of ['end', 'close', 'error']) {
+  test(`output boundary rejects premature ${failure}`, async () => {
+    const source = new PassThrough();
+    const destination = new PassThrough();
+    destination.resume();
+    const pending = boundary.forwardUntilBoundary(
+      source,
+      destination,
+      '\0completion-token\0',
+    );
+    const rejected = assert.rejects(pending, /boundary|broken pipe/);
+    source.write('Partial result\0completion');
+    if (failure === 'end') source.end();
+    else
+      source.destroy(
+        failure === 'error' ? new Error('broken pipe') : undefined,
+      );
+
+    await rejected;
+  });
+}
+
 test('fragmented output boundaries drain helper output', async () => {
   const source = new PassThrough();
   const destination = new PassThrough({ highWaterMark: 1 });
