@@ -75,6 +75,37 @@ test('empty successful gate output still blocks', async (t) => {
   assert.equal(JSON.parse(run.stdout).decision, 'block');
 });
 
+test('gate accepts a single final verdict after explanatory prose', () => {
+  assert.deepEqual(
+    parseGateOutput(
+      'The previous turn made no edits.\n\nALLOW: Nothing to gate.',
+    ),
+    {},
+  );
+  const blocked = parseGateOutput('Found a regression.\n\nBLOCK: Handle null.');
+  assert.equal(blocked.decision, 'block');
+  assert.match(blocked.reason, /Handle null/);
+});
+
+test('gate rejects ambiguous or embedded verdicts', () => {
+  for (const output of [
+    'ALLOW: Fine\nBLOCK: Regression',
+    'BLOCK: Regression\nALLOW: Fine',
+    'Explanation\nALLOW: Fine\nALLOW: Fine',
+    'Explanation\n> ALLOW: Fine',
+    'Explanation\n```text\nALLOW: Fine\n```',
+    'Explanation\n```text\nALLOW: Fine',
+    'Explanation\n~~~text\nALLOW: Fine',
+    'Explanation\nALLOW: Fine\nMore explanation',
+    'Explanation\nALLOW:',
+    'Explanation only',
+  ]) {
+    const decision = parseGateOutput(output);
+    assert.equal(decision.decision, 'block', output);
+    assert.match(decision.reason, /unexpected answer/, output);
+  }
+});
+
 test('unreadable settings use the upstream disabled default', async (t) => {
   const f = await fixture(t);
   await f.run(['setup', '--enable-review-gate']);

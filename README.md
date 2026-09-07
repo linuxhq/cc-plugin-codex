@@ -161,7 +161,10 @@ as their workspace. Gate settings and jobs remain scoped to that directory. The
 two diff-review commands require a Git checkout.
 
 The gate reviews the previous Codex turn, including whether its design should
-ship. It uses upstream's `ALLOW: <reason>` / `BLOCK: <reason>` contract.
+ship. It requests upstream's first-line `ALLOW: <reason>` / `BLOCK: <reason>`
+contract. As a Claude output adaptation, a single verdict with a reason on the
+final line is also accepted after explanatory prose. Multiple verdict lines,
+quoted or fenced fallback verdicts, and missing verdicts still block.
 Reporting-only turns can return ALLOW without repository inspection. There is no
 repository snapshot cache or continued-turn exemption. Unexpected output and
 failed reviews, including authentication failures, block with manual-review

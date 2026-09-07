@@ -8,19 +8,29 @@ export function gateFailure(message) {
 }
 
 export function parseGateOutput(output) {
-  const first = String(output ?? '')
+  const lines = String(output ?? '')
     .trim()
-    .split(/\r?\n/, 1)[0];
+    .split(/\r?\n/);
+  const verdicts = lines.filter((line) => /^(ALLOW|BLOCK):/.test(line));
+  const verdict = verdicts[0];
+  if (
+    verdicts.length !== 1 ||
+    (verdict !== lines[0] &&
+      (verdict !== lines.at(-1) ||
+        !/^(ALLOW|BLOCK):\s*\S/.test(verdict) ||
+        lines.some((line) => /^\s*(`{3,}|~{3,})/.test(line))))
+  )
+    return gateFailure('The reviewer returned an unexpected answer.');
 
-  if (first.startsWith('ALLOW:')) return {};
+  if (verdict.startsWith('ALLOW:')) return {};
 
-  if (first.startsWith('BLOCK:')) {
+  if (verdict.startsWith('BLOCK:')) {
     return {
       decision: 'block',
       reason:
         'Claude stop-time review found issues that still need fixes ' +
         'before ending the session: ' +
-        (first.slice('BLOCK:'.length).trim() || output.trim()),
+        (verdict.slice('BLOCK:'.length).trim() || output.trim()),
     };
   }
 
