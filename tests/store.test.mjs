@@ -14,7 +14,7 @@ import {
 } from '../plugins/claude/scripts/lib/store.mjs';
 import { fixture } from './helpers.mjs';
 
-test('stale workers cannot crowd out newly completed results', async (t) => {
+test('retention preserves stale workers and the latest result', async (t) => {
   const f = await fixture(t);
   const root = join(f.root, 'store');
   const stale = await createJob(root, { repo: f.repo });
@@ -22,10 +22,8 @@ test('stale workers cannot crowd out newly completed results', async (t) => {
   const completed = await createJob(root, { repo: f.repo });
   await saveJob(root, { ...completed, state: 'completed' });
   await pruneJobs(root, { maxCount: 1 });
-  assert.deepEqual(
-    (await listJobs(root)).map((job) => job.id),
-    [completed.id],
-  );
+  assert.equal((await loadJob(root, stale.id)).state, 'queued');
+  assert.equal((await loadJob(root, completed.id)).state, 'completed');
 });
 
 test('full active budget retains the latest result', async (t) => {

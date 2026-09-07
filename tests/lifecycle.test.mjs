@@ -1,12 +1,19 @@
 import assert from 'node:assert/strict';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, utimes } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
 import { fingerprint } from '../plugins/claude/scripts/lib/git.mjs';
-import { fixture, eventually } from './helpers.mjs';
-import { createJob, saveJob } from '../plugins/claude/scripts/lib/store.mjs';
+import { fixture, eventually, cli } from './helpers.mjs';
+import {
+  createJob,
+  saveJob,
+  listJobs,
+  pruneJobs,
+  jobPath,
+} from '../plugins/claude/scripts/lib/store.mjs';
 
 const hook = fileURLToPath(
   new URL(
@@ -14,6 +21,54 @@ const hook = fileURLToPath(
     import.meta.url,
   ),
 );
+
+test('paused workers survive pruning and finish session cleanup', async (t) => {
+  const f = await fixture(t);
+  const worker = spawn(process.execPath, [cli, 'rescue', 'inspect'], {
+    cwd: f.repo,
+    env: { ...f.env, FAKE_CLAUDE_MODE: 'slow' },
+    stdio: 'ignore',
+  });
+  const exited = new Promise((resolve) => worker.once('exit', resolve));
+  f.cleanup(async () => {
+    worker.kill('SIGCONT');
+    worker.kill('SIGTERM');
+    await exited;
+  });
+  await eventually(async () => {
+    try {
+      return Boolean(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+
+      throw error;
+    }
+  });
+  const root = join(
+    f.env.CLAUDE_REVIEW_DATA_DIR,
+    'jobs',
+    fingerprint(f.repo).slice(0, 24),
+  );
+  const [job] = await listJobs(root);
+  worker.kill('SIGSTOP');
+  const past = new Date(Date.now() - 60_000);
+  await utimes(jobPath(root, job.id, 'heartbeat'), past, past);
+  const finished = await createJob(root, { repo: f.repo });
+  await saveJob(root, { ...finished, state: 'completed' });
+  await pruneJobs(root, { maxCount: 1 });
+  await access(jobPath(root, job.id));
+  const run = await runProcess(process.execPath, [hook, 'SessionEnd'], {
+    cwd: f.repo,
+    env: f.env,
+    input: JSON.stringify({ cwd: f.repo, session_id: 'test-session' }),
+  });
+  assert.equal(run.code, 0, run.stderr);
+  await access(jobPath(root, job.id));
+  await access(jobPath(root, job.id, 'cancel'));
+  worker.kill('SIGCONT');
+  await exited;
+  await assert.rejects(access(jobPath(root, job.id)), { code: 'ENOENT' });
+});
 
 test('session end cleans up its own jobs', async (t) => {
   const f = await fixture(t);
@@ -91,7 +146,7 @@ test('unrelated lifecycle events leave records intact', async (t) => {
   assert.equal((await f.run(['result', finished.id])).code, 0);
 });
 
-test('session end removes interrupted workers too', async (t) => {
+test('session end requests cancellation for stale workers', async (t) => {
   const f = await fixture(t);
   const root = join(
     f.env.CLAUDE_REVIEW_DATA_DIR,
@@ -109,5 +164,7 @@ test('session end removes interrupted workers too', async (t) => {
     input: JSON.stringify({ cwd: f.repo, session_id: 'test-session' }),
   });
   assert.equal(run.code, 0, run.stderr);
-  await assert.rejects(access(join(root, job.id)), { code: 'ENOENT' });
+  await access(join(root, job.id, 'job.json'));
+  await access(join(root, job.id, 'session-ended'));
+  await access(join(root, job.id, 'cancel'));
 });

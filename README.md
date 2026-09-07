@@ -141,9 +141,11 @@ active job and asks for an ID if several are active. Cancellation can leave
 partial edits from write rescue. Inspect the working tree before continuing.
 Background jobs continue after the launching Codex turn ends. When the Codex
 session ends, the SessionEnd hook removes its finished job records and cancels
-active jobs. Workers remove their records after stopping. Other sessions and the
-checkout's gate setting are preserved. The hook uses Codex's maximum SessionEnd
-timeout of 3 seconds, rather than upstream's 5 seconds.
+active jobs. Workers remove their records after stopping. A stale heartbeat
+alone does not permit deletion; a worker that never recovers can leave records
+behind. Other sessions and the checkout's gate setting are preserved. The hook
+uses Codex's maximum SessionEnd timeout of 3 seconds, rather than upstream's 5
+seconds.
 
 ## Automatic review gate
 
@@ -201,23 +203,26 @@ implementation differences are:
 - Background execution uses a detached Node worker. The launcher saves a private
   prompt file and returns after spawning; the worker owns execution state and
   deletes the prompt after reading it. All Claude runs use a process supervisor
-  that stops Claude if its owning worker dies. Startup/execution errors appear
-  in job results or the worker log. There is no prompt acknowledgment deadline.
+  that stops Claude if its owning worker dies. During cancellation, the
+  supervisor stays alive for process-group force-kill escalation even if Claude
+  exits before its descendants. Startup/execution errors appear in job results
+  or the worker log. There is no prompt acknowledgment deadline.
 - Conversation transfer seeds context instead of importing native turns, as
   described above.
 
 Runtime records are stored outside the checkout under
 `~/.codex/plugins/data/claude-review/jobs/`, grouped by checkout, with private
 permissions. History uses a 50-job budget, keeping the most recently updated
-finished jobs after counting unfinished jobs. Interrupted records are eligible
-for pruning. Active worker records are never pruned because workers need them
-for cancellation and completion. At least one finished result is retained even
-when active workers fill the budget, so the latest completion remains
-retrievable; this can exceed the 50-job budget. `CLAUDE_REVIEW_DATA_DIR`
-overrides that location. Records and Claude's persistent rescue, gate, and
-transfer sessions can contain source code. Review restrictions are not an
-operating-system sandbox. Review supplied content before sending it; transcripts
-and output may retain it.
+finished jobs after counting unfinished jobs. Only records with a saved
+completed, failed, or cancelled state are eligible for pruning. A stale
+heartbeat is advisory status, not proof that a worker has stopped; interrupted
+records are retained for cancellation and completion. At least one finished
+result is retained even when active workers fill the budget, so the latest
+completion remains retrievable; this can exceed the 50-job budget.
+`CLAUDE_REVIEW_DATA_DIR` overrides that location. Records and Claude's
+persistent rescue, gate, and transfer sessions can contain source code. Review
+restrictions are not an operating-system sandbox. Review supplied content before
+sending it; transcripts and output may retain it.
 
 ## Development
 

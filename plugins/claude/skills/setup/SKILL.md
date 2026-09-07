@@ -38,8 +38,10 @@ terminal. Setup does not start a paid review.
 
 The bundled Stop and SessionEnd hooks require Codex hook support and user trust.
 Explain that the user must trust the plugin hooks in `/hooks` and start a new
-session after installing or updating the plugin. SessionEnd cancels this
-session's jobs and removes their records; the gate setting is preserved.
+session after installing or updating the plugin. SessionEnd requests
+cancellation for this session's unfinished jobs; workers remove their records
+after stopping. Finished records are removed immediately. A worker that never
+recovers can leave records behind. The gate setting is preserved.
 
 The gate sends the previous Codex response to Claude to review that turn's work.
 Claude returns `ALLOW: <reason>` when there are no blocking findings (including

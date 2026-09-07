@@ -5,7 +5,6 @@ import { workspaceRoot } from './lib/git.mjs';
 import { currentSessionId } from './lib/status.mjs';
 import {
   jobPath,
-  jobState,
   listJobs,
   loadJob,
   storeRoot,
@@ -49,11 +48,7 @@ async function cleanupJob(root, job) {
 
       throw error;
     });
-    if (
-      latest &&
-      (terminalStates.includes(latest.state) ||
-        (await jobState(root, latest)) === 'interrupted')
-    )
+    if (latest && terminalStates.includes(latest.state))
       await rm(jobPath(root, job.id, '.'), { recursive: true, force: true });
   }
 }

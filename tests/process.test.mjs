@@ -1,6 +1,63 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { eventually } from './helpers.mjs';
+
+test('cancellation stops descendants after their parent exits', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'claude-cancel-test-'));
+  const path = join(root, 'activity.json');
+  let pid;
+  const controller = new AbortController();
+  const descendant = `
+    const fs = require('node:fs');
+    process.on('SIGTERM', () => {});
+    setInterval(() => fs.writeFileSync(process.argv[1], JSON.stringify({
+      pid: process.pid, time: Date.now()
+    })), 25);
+  `;
+  const parent = `
+    require('node:child_process').spawn(process.execPath,
+      ['-e', ${JSON.stringify(descendant)}, process.argv[1]],
+      { stdio: 'ignore' });
+    setInterval(() => {}, 100);
+  `;
+  const run = runProcess(process.execPath, ['-e', parent, path], {
+    supervise: true,
+    signal: controller.signal,
+    timeout: null,
+  }).catch((error) => error);
+  t.after(async () => {
+    controller.abort();
+    await run;
+    if (pid) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+    }
+
+    await rm(root, { recursive: true, force: true });
+  });
+  await eventually(async () => {
+    try {
+      pid = JSON.parse(await readFile(path, 'utf8')).pid;
+      return pid;
+    } catch (error) {
+      if (error.code === 'ENOENT' || error instanceof SyntaxError) return false;
+
+      throw error;
+    }
+  });
+  controller.abort();
+  assert.match((await run).message, /cancelled/);
+  const stopped = await readFile(path, 'utf8');
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(await readFile(path, 'utf8'), stopped);
+});
 
 test('reports missing executable without hanging', async () => {
   await assert.rejects(runProcess('/no/such/executable', []), {

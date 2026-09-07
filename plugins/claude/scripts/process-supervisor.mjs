@@ -3,6 +3,12 @@ import { spawn } from 'node:child_process';
 // This process owns the reviewer's process group. IPC disconnect also fires
 // when the worker is killed with SIGKILL, where exit handlers cannot run.
 const [command, ...args] = process.argv.slice(2);
+let stopping = false;
+// Keep the group leader alive until runProcess escalates to SIGKILL, even if
+// Claude exits first and a descendant has redirected its output.
+process.on('SIGTERM', () => {
+  stopping = true;
+});
 const child = spawn(command, args, { stdio: ['pipe', 'inherit', 'inherit'] });
 process.stdin.pipe(child.stdin);
 child.stdin.on('error', () => {});
@@ -18,6 +24,8 @@ child.once('error', (error) => {
   if (process.connected) process.disconnect();
 });
 child.once('close', (code) => {
+  if (stopping) return;
+
   process.removeListener('disconnect', disconnected);
   process.exitCode = code ?? 1;
   if (process.connected) process.disconnect();
