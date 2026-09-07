@@ -1,11 +1,84 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import * as repo from '../plugins/claude/scripts/lib/repository-tools.mjs';
 import { fixture } from './helpers.mjs';
 import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
 import { fileURLToPath } from 'node:url';
+
+test('committed reads exclude dirty branch changes', async (t) => {
+  const f = await fixture(t);
+  await f.git('checkout', '-b', 'feature');
+  await f.write('app.js', 'committed feature\nsecond line\n');
+  await f.write('removed.txt', 'committed but removed locally\n');
+  await f.git('add', '.');
+  await f.git('commit', '-m', 'Feature');
+  await f.write('app.js', 'staged work\n');
+  await f.git('add', '.');
+  await f.write('app.js', 'unstaged work\n');
+  await rm(join(f.repo, 'removed.txt'));
+  const before = await f.git('status', '--porcelain');
+  const read = (path, revision, options = {}) =>
+    repo.inspectRepository(f.repo, {
+      operation: 'read',
+      path,
+      revision,
+      ...options,
+    });
+  assert.match(await read('app.js'), /unstaged work/);
+  assert.match(await read('app.js', 'HEAD'), /committed feature/);
+  assert.match(await read('app.js', 'main'), /export const value = 1/);
+  assert.match(await read('removed.txt', 'HEAD'), /removed locally/);
+  assert.match(
+    await read('app.js', 'HEAD', { offset: 1, limit: 1 }),
+    /^2: second line/,
+  );
+  assert.equal(await f.git('status', '--porcelain'), before);
+});
+
+test('committed reads validate inputs and reject binary blobs', async (t) => {
+  const f = await fixture(t);
+  await f.write('binary', Buffer.from([0, 1, 2]));
+  await f.write('-literal:name', 'literal path contents');
+  await f.git('add', '.');
+  await f.git('commit', '-m', 'Blobs');
+  for (const input of [
+    { revision: '' },
+    { revision: '--output=../escaped' },
+    { revision: 'HEAD; touch ../escaped' },
+    { revision: 'missing-ref' },
+    { revision: 'HEAD', path: '../outside' },
+    { revision: 'HEAD', path: '/etc/passwd' },
+    { revision: 'HEAD', path: 'missing-file' },
+    { revision: 'HEAD', operation: 'diff' },
+  ])
+    await assert.rejects(
+      repo.inspectRepository(f.repo, {
+        operation: 'read',
+        path: 'app.js',
+        ...input,
+      }),
+    );
+
+  await assert.rejects(
+    repo.inspectRepository(f.repo, {
+      operation: 'read',
+      path: 'binary',
+      revision: 'HEAD',
+    }),
+    /Binary file/,
+  );
+  assert.match(
+    await repo.inspectRepository(f.repo, {
+      operation: 'read',
+      path: '-literal:name',
+      revision: 'HEAD',
+    }),
+    /literal path contents/,
+  );
+  assert.equal(await f.git('status', '--porcelain'), '');
+});
 
 test('inspection can page past fifty commits', async (t) => {
   const f = await fixture(t);

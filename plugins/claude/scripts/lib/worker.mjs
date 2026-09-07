@@ -9,23 +9,27 @@ import {
   terminalStates,
 } from './store.mjs';
 import {
+  appendFinalOutput,
+  createProgressReporter,
   createJobProgressUpdater,
   saveProgress,
   updateProgress,
 } from './progress.mjs';
 
-export async function executeJob(root, id, { prompt } = {}) {
+export async function executeJob(root, id, options = {}) {
   try {
-    return await runJob(root, id, prompt);
+    return await runJob(root, id, options);
   } finally {
     await cleanupWorker(root, id);
   }
 }
 
-async function runJob(root, id, prompt) {
+async function runJob(root, id, { prompt, stderr = false }) {
   const job = await loadJob(root, id);
   if (terminalStates.includes(job.state)) return job;
 
+  const directory = job.sessionId ? jobPath(root, id, '.') : undefined;
+  const report = createProgressReporter(root, id, { stderr });
   const controller = new AbortController();
   const abort = () => controller.abort();
   process.once('SIGTERM', abort);
@@ -38,11 +42,13 @@ async function runJob(root, id, prompt) {
     },
   );
   let stopMonitor = async () => {};
+  let outcome = 'completed';
 
   try {
     if (prompt) job.prompt = prompt;
 
     validatePrompt(job.prompt);
+    report(progress);
     if (await exists(jobPath(root, id, 'cancel'))) controller.abort();
 
     if (controller.signal.aborted) throw new Error('Review cancelled.');
@@ -51,12 +57,17 @@ async function runJob(root, id, prompt) {
     job.startedAt = new Date().toISOString();
     await saveJob(root, job);
     stopMonitor = monitor(root, job, controller, () => progress);
-    job.output = await reviewWithClaude(job, controller.signal, (update) => {
-      progress = updateProgress(progress, update);
-    });
-    job.state = controller.signal.aborted ? 'cancelled' : 'completed';
+    job.output = await reviewWithClaude(
+      job,
+      controller.signal,
+      (update) => {
+        progress = updateProgress(progress, update);
+        report(update);
+      },
+      directory,
+    );
   } catch (error) {
-    job.state = controller.signal.aborted ? 'cancelled' : 'failed';
+    outcome = 'failed';
     job.error = error.message;
   } finally {
     await stopMonitor();
@@ -64,6 +75,8 @@ async function runJob(root, id, prompt) {
     process.removeListener('SIGINT', abort);
   }
 
+  // Drain progress writes before publishing any terminal state.
+  job.state = controller.signal.aborted ? 'cancelled' : outcome;
   job.finishedAt = new Date().toISOString();
   job.elapsedMs =
     Date.parse(job.finishedAt) - Date.parse(job.startedAt || job.createdAt);
@@ -72,6 +85,7 @@ async function runJob(root, id, prompt) {
     phase: job.state === 'completed' ? 'done' : job.state,
     summary: finalSummary(job),
   });
+  appendFinalOutput(root, job);
   await saveJob(root, job);
   return job;
 }

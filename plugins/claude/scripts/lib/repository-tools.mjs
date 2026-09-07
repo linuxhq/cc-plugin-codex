@@ -1,13 +1,14 @@
 import { constants } from 'node:fs';
 import { open, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { git, repositoryRoot } from './git.mjs';
+import { git as runGit } from './git.mjs';
 import { inspectionPage } from './inspection-page.mjs';
 
 export const inspectionTool = {
   name: 'inspect',
   description:
-    'Read-only repository inspection: files, paged reads, status, ' +
+    'Read-only repository inspection: files, paged working-tree or ' +
+    'committed-file reads, status, ' +
     'staged/unstaged or base...HEAD diffs, and recent history. ' +
     'Report unavailable evidence as a review limitation.',
   inputSchema: {
@@ -25,6 +26,12 @@ export const inspectionTool = {
           'Literal repository-relative file path; optional diff filter.',
       },
       base: { type: 'string', description: 'Base ref for branch diff.' },
+      revision: {
+        type: 'string',
+        description:
+          'For read only: commit ref, such as HEAD or main. Omit to read ' +
+          'the working tree. Use HEAD for branch-review surrounding code.',
+      },
       staged: { type: 'boolean' },
       offset: { type: 'integer', minimum: 0 },
       limit: { type: 'integer', minimum: 1, maximum: 2000 },
@@ -38,6 +45,10 @@ export const inspectionTool = {
     },
   },
 };
+
+// Inspection children belong to the reviewer's supervised process group.
+const git = (repo, args, options = {}) =>
+  runGit(repo, args, { ...options, detached: false });
 
 const inside = (root, path) => {
   const rel = relative(root, path);
@@ -54,6 +65,7 @@ function validateInput(input) {
   }
 
   validatePage(input);
+  validateRevision(input);
   if (input.path !== undefined) validatePath(input.path);
 
   if (
@@ -64,6 +76,17 @@ function validateInput(input) {
 
   if (input.staged !== undefined && typeof input.staged !== 'boolean')
     throw new Error('Invalid staged flag.');
+}
+
+function validateRevision(input) {
+  if (
+    input.revision !== undefined &&
+    (input.operation !== 'read' ||
+      typeof input.revision !== 'string' ||
+      !input.revision.trim() ||
+      input.revision.includes('\0'))
+  )
+    throw new Error('Invalid read revision.');
 }
 
 function validatePage(input) {
@@ -86,7 +109,7 @@ export async function inspectRepository(repo, input, options = {}) {
   if (input.operation === 'files') return listFiles(repo, input, options);
 
   if (input.operation === 'read')
-    await readRepositoryFile(repo, input.path, page);
+    await readRepositoryFile(repo, input.path, page, input.revision);
   else if (input.operation === 'diff') await diff(repo, input, page);
   else if (input.operation === 'status')
     await streamGit(repo, ['status', '--short', '--untracked-files=all'], page);
@@ -123,7 +146,7 @@ async function listFiles(repo, input, options) {
     render: (file) => JSON.stringify(file),
   });
   try {
-    await repositoryRoot(repo);
+    await git(repo, ['rev-parse', '--show-toplevel']);
   } catch {
     await listDirectory(repo, repo, input.path, page);
     return page.finish();
@@ -156,8 +179,16 @@ async function listDirectory(root, directory, filter, page) {
   }
 }
 
-async function readRepositoryFile(repo, file, page) {
+async function readRepositoryFile(repo, file, page, revision) {
   validatePath(file);
+  if (revision !== undefined) {
+    const commit = await resolveCommit(repo, revision);
+    return git(repo, ['cat-file', 'blob', `${commit}:${file}`], {
+      captureStdout: false,
+      onStdout: (chunk) => readText(chunk, page),
+    });
+  }
+
   const path = await realpath(resolve(repo, file));
   if (!inside(repo, path)) throw new Error('File escapes repository.');
 
@@ -174,29 +205,38 @@ async function readRepositoryFile(repo, file, page) {
       autoClose: false,
     });
     for await (const chunk of stream) {
-      if (chunk.includes('\0')) throw new Error('Binary file; not reviewed.');
-
-      page.write(chunk);
+      readText(chunk, page);
     }
   } finally {
     await handle.close();
   }
 }
 
+function readText(chunk, page) {
+  if (chunk.includes('\0')) throw new Error('Binary file; not reviewed.');
+
+  page.write(chunk);
+}
+
+async function resolveCommit(repo, ref) {
+  const revision = (
+    await git(repo, [
+      'rev-parse',
+      '--verify',
+      '--end-of-options',
+      `${ref}^{commit}`,
+    ])
+  ).trim();
+  if (!/^[a-f0-9]{40,64}$/.test(revision))
+    throw new Error('Invalid resolved revision.');
+
+  return revision;
+}
+
 async function diff(repo, input, page) {
   const args = ['diff', '--no-ext-diff', '--no-color', '--submodule=diff'];
   if (input.base) {
-    const revision = (
-      await git(repo, [
-        'rev-parse',
-        '--verify',
-        '--end-of-options',
-        `${input.base}^{commit}`,
-      ])
-    ).trim();
-    if (!/^[a-f0-9]{40,64}$/.test(revision))
-      throw new Error('Invalid resolved revision.');
-
+    const revision = await resolveCommit(repo, input.base);
     args.push(`${revision}...HEAD`);
   } else if (input.staged) args.push('--cached');
 

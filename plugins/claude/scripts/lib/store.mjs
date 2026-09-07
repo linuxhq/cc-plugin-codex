@@ -166,7 +166,7 @@ export async function pruneJobs(root, { maxCount = 50 } = {}) {
   for (const job of jobs.slice(maxCount)) {
     await rm(jobPath(root, job.id), { force: true });
     await rm(jobPath(root, job.id, 'worker.log'), { force: true });
-    if (terminalStates.includes(job.state))
+    if (terminalStates.includes(job.state) && !(await hasHelpers(root, job.id)))
       await rm(join(root, job.id), { recursive: true, force: true });
   }
 
@@ -194,7 +194,7 @@ async function cleanupAbandonedFiles(root) {
       entry.isDirectory() &&
       /^review-[a-f0-9-]{36}$/.test(entry.name) &&
       !(await exists(jobPath(root, entry.name))) &&
-      (await workerExited(root, { id: entry.name }))
+      (await executionExited(root, entry.name))
     ) {
       await rm(join(root, entry.name), { recursive: true, force: true });
     }
@@ -205,7 +205,7 @@ async function cleanupAbandonedFiles(root) {
 export async function cleanupWorker(root, id) {
   if (await exists(jobPath(root, id, 'session-ended')))
     await removeJob(root, id);
-  else if (!(await exists(jobPath(root, id))))
+  else if (!(await exists(jobPath(root, id))) && !(await hasHelpers(root, id)))
     await rm(jobPath(root, id, '.'), { recursive: true, force: true });
 }
 
@@ -240,6 +240,21 @@ function processExited(pid) {
     if (error.code === 'ESRCH') return true;
 
     if (error.code === 'EPERM') return false;
+
+    throw error;
+  }
+}
+
+async function executionExited(root, id) {
+  return (await workerExited(root, { id })) && !(await hasHelpers(root, id));
+}
+
+async function hasHelpers(root, id) {
+  try {
+    const pid = Number(await readFile(jobPath(root, id, 'helper-pid'), 'utf8'));
+    return !processExited(pid);
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
 
     throw error;
   }

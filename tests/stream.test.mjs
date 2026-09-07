@@ -3,6 +3,104 @@ import test from 'node:test';
 import { reviewStream } from '../plugins/claude/scripts/lib/stream.mjs';
 import { parseResult } from '../plugins/claude/scripts/lib/claude.mjs';
 
+test('periodic progress preserves the matching command and phase', () => {
+  const updates = [];
+  const stream = reviewStream((update) => updates.push(update));
+  const send = (event) => stream.write(JSON.stringify(event) + '\n');
+  send({
+    type: 'assistant',
+    message: {
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tests',
+          name: 'Bash',
+          input: { command: 'npm test' },
+        },
+        {
+          type: 'tool_use',
+          id: 'status',
+          name: 'Bash',
+          input: { command: 'git status' },
+        },
+      ],
+    },
+  });
+  for (const id of ['tests', 'status', 'tests'])
+    send({ type: 'tool_progress', tool_name: 'Bash', tool_use_id: id });
+
+  assert.deepEqual(updates.slice(2), [
+    { phase: 'verifying', summary: 'Running command: npm test' },
+    { phase: 'running', summary: 'Running command: git status' },
+    { phase: 'verifying', summary: 'Running command: npm test' },
+  ]);
+  send({
+    type: 'user',
+    message: {
+      content: [
+        { type: 'tool_result', tool_use_id: 'tests', content: 'Passed' },
+      ],
+    },
+  });
+  send({ type: 'tool_progress', tool_name: 'Bash', tool_use_id: 'tests' });
+  assert.deepEqual(updates.at(-1), {
+    phase: 'running',
+    summary: 'Using Bash.',
+  });
+});
+
+test('tool outcomes match concurrent calls and retain diagnostics', () => {
+  const updates = [];
+  const stream = reviewStream((update) => updates.push(update));
+  const send = (type, content) =>
+    stream.write(JSON.stringify({ type, message: { content } }) + '\n');
+  send('assistant', [
+    {
+      type: 'tool_use',
+      id: 'test',
+      name: 'Bash',
+      input: { command: 'npm test' },
+    },
+    { type: 'tool_use', id: 'read', name: 'Read', input: {} },
+  ]);
+  send('user', [
+    { type: 'tool_result', tool_use_id: 'read', content: 'File contents' },
+    {
+      type: 'tool_result',
+      tool_use_id: 'test',
+      is_error: true,
+      content: [{ type: 'text', text: 'Exit code 1\nAssertion failed' }],
+    },
+  ]);
+  send('assistant', [
+    {
+      type: 'tool_use',
+      id: 'retry',
+      name: 'Bash',
+      input: { command: 'npm test' },
+    },
+  ]);
+  send('user', [
+    { type: 'tool_result', tool_use_id: 'retry', content: 'All tests passed' },
+  ]);
+  assert.deepEqual(
+    updates.map((update) => update.summary),
+    [
+      'Running command: npm test',
+      'Using Read.',
+      'Tool Read completed.',
+      'Command failed: npm test',
+      'Running command: npm test',
+      'Command completed: npm test',
+    ],
+  );
+  assert.equal(updates[3].phase, 'verifying');
+  assert.equal(updates[3].logBody, 'Exit code 1\nAssertion failed');
+  assert.equal(updates[5].logBody, 'All tests passed');
+  stream.write('{"type":"result","subtype":"success","result":"Recovered"}\n');
+  assert.equal(parseResult(stream.finish()), 'Recovered');
+});
+
 test('repeated session IDs do not reset ongoing progress', () => {
   const phases = [];
   const stream = reviewStream(

@@ -11,6 +11,7 @@ export function reviewStream(onProgress = () => {}, onSession = () => {}) {
   let final;
   let sessionId;
   let diagnostic = '';
+  const activeTools = new Map();
   const receive = (line) => {
     if (!line.trim()) return;
 
@@ -38,7 +39,7 @@ export function reviewStream(onProgress = () => {}, onSession = () => {}) {
       final = event;
     } else if (!event.type) {
       diagnostic = `${diagnostic}\n${line}`;
-    } else reportProgress(event, onProgress);
+    } else reportProgress(event, onProgress, activeTools);
   };
   return {
     write(chunk) {
@@ -57,22 +58,58 @@ export function reviewStream(onProgress = () => {}, onSession = () => {}) {
   };
 }
 
-function reportProgress(event, notify) {
+function reportProgress(event, notify, activeTools) {
   if (event.type === 'system' && event.subtype === 'init')
     notify({ phase: 'reviewing', summary: 'Claude initialized.' });
 
-  if (event.type === 'tool_progress') notify(toolProgress(event.tool_name));
+  if (event.type === 'tool_progress')
+    reportToolProgress(event, notify, activeTools);
 
-  if (event.type === 'assistant') {
-    for (const block of event.message?.content ?? [])
-      reportBlock(block, notify);
+  if (['assistant', 'user'].includes(event.type)) {
+    for (const block of event.message?.content ?? []) {
+      if (event.type === 'assistant') reportBlock(block, notify, activeTools);
+      else if (block.type === 'tool_result')
+        reportToolResult(block, notify, activeTools);
+    }
   }
 
   reportPartial(event, notify);
 }
 
-function reportBlock(block, notify) {
-  if (block.type === 'tool_use') notify(toolProgress(block.name, block.input));
+function reportToolProgress(event, notify, activeTools) {
+  const tool = activeTools.get(event.tool_use_id);
+  notify(toolProgress(tool?.name || event.tool_name, tool?.input));
+}
+
+function reportToolResult(block, notify, activeTools) {
+  const tool = activeTools.get(block.tool_use_id);
+  activeTools.delete(block.tool_use_id);
+  const status = block.is_error ? 'failed' : 'completed';
+  const command = tool?.name === 'Bash' && tool.input?.command;
+  const summary = command
+    ? `Command ${status}: ${command}`
+    : `Tool ${tool?.name || block.tool_use_id} ${status}.`;
+  const content =
+    typeof block.content === 'string'
+      ? block.content
+      : (block.content ?? [])
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text)
+          .join('\n');
+  notify({
+    phase: toolProgress(tool?.name, tool?.input).phase,
+    summary,
+    logBody: content,
+  });
+}
+
+function reportBlock(block, notify, activeTools) {
+  if (block.type === 'tool_use') {
+    if (block.id)
+      activeTools.set(block.id, { name: block.name, input: block.input });
+
+    notify(toolProgress(block.name, block.input));
+  }
 
   if (block.type === 'text' && block.text?.trim())
     notify({ phase: 'reviewing', summary: block.text });
@@ -94,5 +131,11 @@ function toolProgress(name, input = {}) {
     phase = verification.test(input.command || '') ? 'verifying' : 'running';
   }
 
-  return { phase, summary: `Using ${name}.` };
+  return {
+    phase,
+    summary:
+      name === 'Bash' && input.command
+        ? `Running command: ${input.command}`
+        : `Using ${name}.`,
+  };
 }

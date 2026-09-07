@@ -70,8 +70,16 @@ async function main(options) {
     return emit({ job: await jobSnapshot(root, job) }, text, options.json);
   }
 
-  console.error(`${job.command} started: ${job.id}`);
-  const completed = await executeJob(root, job.id, { prompt: job.prompt });
+  return runForeground(root, job, options.json);
+}
+
+async function runForeground(root, job, json) {
+  if (!json) console.error(`${job.command} started: ${job.id}`);
+
+  const completed = await executeJob(root, job.id, {
+    prompt: job.prompt,
+    stderr: !json,
+  });
   const output = await jobResult(root, completed);
   emit(
     {
@@ -80,7 +88,7 @@ async function main(options) {
       failed: output.failed,
     },
     output.text,
-    options.json,
+    json,
   );
   if (completed.state !== 'completed') process.exitCode = 1;
 }

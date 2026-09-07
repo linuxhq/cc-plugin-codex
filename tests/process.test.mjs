@@ -7,6 +7,52 @@ import { tmpdir } from 'node:os';
 import { eventually } from './helpers.mjs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { PassThrough } from 'node:stream';
+import * as boundary from '../plugins/claude/scripts/lib/output-boundary.mjs';
+
+test('fragmented output boundaries drain helper output', async () => {
+  const source = new PassThrough();
+  const destination = new PassThrough({ highWaterMark: 1 });
+  const marker = '\0completion-token\0';
+  let output = '';
+  destination.setEncoding('utf8').on('data', (chunk) => {
+    output += chunk;
+  });
+  const pending = boundary.forwardUntilBoundary(source, destination, marker);
+  const expected = 'é😀\0completing\nComplete result\n';
+  const input = Buffer.from(expected + marker + 'Helper output');
+  for (const byte of input) source.write(Buffer.from([byte]));
+
+  await pending;
+  source.end('More helper output');
+  assert.equal(output, expected);
+});
+
+test('supervised completion preserves output and exit status', async () => {
+  let bytes = 0;
+  const result = await runProcess(
+    process.execPath,
+    [
+      '-e',
+      `
+    process.stdout.write('é'.repeat(4 * 1024 * 1024));
+    process.stderr.write('detail'.repeat(1024 * 1024));
+    process.exitCode = 7;
+  `,
+    ],
+    {
+      supervise: true,
+      captureStdout: false,
+      maxBytes: Infinity,
+      onStdout(chunk) {
+        bytes += Buffer.byteLength(chunk);
+      },
+    },
+  );
+  assert.equal(result.code, 7);
+  assert.equal(bytes, 8 * 1024 * 1024);
+  assert.equal(result.stderr, 'detail'.repeat(1024 * 1024));
+});
 
 test('supervisor escalates direct SIGTERM', async (t) => {
   const supervisor = fileURLToPath(
@@ -19,6 +65,7 @@ test('supervisor escalates direct SIGTERM', async (t) => {
     process.execPath,
     [
       supervisor,
+      '',
       process.execPath,
       '-e',
       `process.on('SIGTERM', () => {});

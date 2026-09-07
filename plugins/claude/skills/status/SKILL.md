@@ -27,6 +27,7 @@ If the user did not pass a job ID:
 If the user did pass a job ID:
 
 - Present the full command output to the user.
+- Preserve the log path for the job's retained activity and final output.
 - Do not summarize or condense it.
 - `--wait` waits until that job is no longer active or the timeout expires.
 - Poll the host process until the status command itself finishes. Default

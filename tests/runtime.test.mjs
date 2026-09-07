@@ -14,6 +14,250 @@ import {
 import { fixture, extractId, eventually, cli } from './helpers.mjs';
 import { spawn } from 'node:child_process';
 
+for (const mode of ['activity', 'fail']) {
+  test(`session cleanup waits for finalized ${mode} output`, async (t) => {
+    const f = await fixture(t);
+    const preload = join(f.root, 'drain-progress.mjs');
+    const observed = join(f.root, 'observed.json');
+    const hook = fileURLToPath(
+      new URL(
+        '../plugins/claude/scripts/session-lifecycle-hook.mjs',
+        import.meta.url,
+      ),
+    );
+    await writeFile(
+      preload,
+      `
+      import fs from 'node:fs/promises';
+      import cp from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      const { writeFile, rename } = fs;
+      const { spawn } = cp;
+      let release;
+      const closed = new Promise((resolve) => { release = resolve; });
+      cp.spawn = (...args) => {
+        const child = spawn(...args);
+        if (args[1]?.[0]?.endsWith('/process-supervisor.mjs')) {
+          child.once('disconnect', () => setImmediate(release));
+        }
+        return child;
+      };
+      fs.writeFile = async (path, ...args) => {
+        if (String(path).endsWith('/heartbeat')) await closed;
+        return writeFile(path, ...args);
+      };
+      fs.rename = async (from, to) => {
+        await rename(from, to);
+        if (!/review-[a-f0-9-]{36}\\.json$/.test(to)) return;
+        const job = JSON.parse(await fs.readFile(to, 'utf8'));
+        if (!(job.output || job.error) || job.finishedAt) return;
+        await writeFile(${JSON.stringify(observed)}, JSON.stringify(job));
+        const hook = ${JSON.stringify(hook)};
+        const child = spawn(process.execPath, [hook, 'SessionEnd'], {
+          env: { ...process.env, NODE_OPTIONS: '' },
+          stdio: ['pipe', 'ignore', 'inherit'],
+        });
+        child.stdin.end(JSON.stringify({
+          cwd: job.repo, session_id: job.sessionId,
+        }));
+        await new Promise((resolve, reject) => {
+          child.once('error', reject);
+          child.once('close', (code) => {
+            if (code === 0) resolve();
+            else reject(new Error('Hook failed'));
+          });
+        });
+      };
+      syncBuiltinESMExports();
+    `,
+    );
+    const response = await f.run(['rescue', '--json', 'inspect'], {
+      NODE_OPTIONS: `--import=${preload}`,
+      FAKE_CLAUDE_MODE: mode,
+    });
+    const interim = JSON.parse(
+      await readFile(observed, 'utf8').catch((error) => {
+        throw new Error(response.stdout + response.stderr, { cause: error });
+      }),
+    );
+    assert.equal(interim.state, 'running');
+    assert.equal(
+      response.code,
+      mode === 'fail' ? 1 : 0,
+      response.stdout + response.stderr,
+    );
+    assert.doesNotMatch(response.stdout + response.stderr, /ENOENT/);
+    const report = JSON.parse(response.stdout);
+    assert.equal(report.job.state, mode === 'fail' ? 'failed' : 'completed');
+    assert.ok(report.job.finishedAt);
+    assert.match(
+      mode === 'fail' ? report.job.error : report.output,
+      mode === 'fail' ? /Provider unavailable/ : /Example finding/,
+    );
+    await assert.rejects(access(report.job.logFile), { code: 'ENOENT' });
+  });
+}
+
+for (const action of ['cancel', 'session-end', 'worker-death']) {
+  test(`inspection children stop after ${action}`, async (t) => {
+    const f = await fixture(t);
+    const activity = join(f.root, 'inspection-activity.json');
+    const converter = join(f.root, 'converter.mjs');
+    await writeFile(
+      converter,
+      `
+      import { writeFileSync, renameSync } from 'node:fs';
+      process.on('SIGTERM', () => {});
+      setInterval(() => {
+        const path = process.env.FAKE_CLAUDE_INSPECTION_ACTIVITY;
+        writeFileSync(path + '.tmp', JSON.stringify({
+          pid: process.pid, time: Date.now(),
+        }));
+        renameSync(path + '.tmp', path);
+      }, 25);
+    `,
+    );
+    await f.write('.gitattributes', '*.js diff=inspection\n');
+    await f.git('add', '.');
+    await f.git('commit', '-m', 'Attributes');
+    await f.git(
+      'config',
+      'diff.inspection.textconv',
+      `'${process.execPath}' '${converter}'`,
+    );
+    await f.write('app.js', 'changed\n');
+    let pid;
+    const launch = await f.run(
+      ['rescue', '--background', '--json', 'inspect'],
+      {
+        FAKE_CLAUDE_MODE: 'inspection',
+        FAKE_CLAUDE_INSPECTION_ACTIVITY: activity,
+      },
+    );
+    assert.equal(launch.code, 0, launch.stderr);
+    const id = JSON.parse(launch.stdout).job.id;
+    f.cleanup(async () => {
+      await f.run(['cancel', id]);
+      if (pid) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch (error) {
+          if (error.code !== 'ESRCH') throw error;
+        }
+      }
+    });
+    await eventually(async () => {
+      try {
+        pid = JSON.parse(await readFile(activity)).pid;
+        return pid;
+      } catch (error) {
+        if (error.code === 'ENOENT') return false;
+
+        throw error;
+      }
+    });
+    if (action === 'cancel') {
+      await f.run(['cancel', id]);
+      await f.run(['status', id, '--wait']);
+    } else if (action === 'session-end') {
+      const hook = fileURLToPath(
+        new URL(
+          '../plugins/claude/scripts/session-lifecycle-hook.mjs',
+          import.meta.url,
+        ),
+      );
+      const ended = await runProcess(process.execPath, [hook, 'SessionEnd'], {
+        cwd: f.repo,
+        env: f.env,
+        input: JSON.stringify({ cwd: f.repo, session_id: 'test-session' }),
+      });
+      assert.equal(ended.code, 0, ended.stderr);
+    } else {
+      const root = join(
+        f.env.CLAUDE_REVIEW_DATA_DIR,
+        'jobs',
+        fingerprint(f.repo).slice(0, 24),
+      );
+      const worker = Number(await readFile(jobPath(root, id, 'worker-pid')));
+      process.kill(worker, 'SIGKILL');
+    }
+
+    await eventually(async () => {
+      const before = await readFile(activity, 'utf8');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return before === (await readFile(activity, 'utf8'));
+    });
+  });
+}
+
+test('foreground progress streams live and survives in logs', async (t) => {
+  const f = await fixture(t);
+  const release = join(f.root, 'release');
+  let stderr = '';
+  const child = spawn(process.execPath, [cli, 'rescue', 'inspect'], {
+    cwd: f.repo,
+    env: { ...f.env, FAKE_CLAUDE_MODE: 'held', FAKE_CLAUDE_RELEASE: release },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  child.stdout.on('data', (chunk) => {
+    stdout += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
+  const exited = new Promise((resolve) => child.once('close', resolve));
+  f.cleanup(async () => {
+    await writeFile(release, '');
+    await exited;
+  });
+  await eventually(() => stderr.includes('[claude] Using Read.'));
+  assert.equal(stdout, '');
+  const id = extractId(stderr);
+  const status = JSON.parse((await f.run(['status', id, '--json'])).stdout);
+  assert.match(await readFile(status.job.logFile, 'utf8'), /Using Read/);
+  await writeFile(release, '');
+  assert.equal(await exited, 0);
+  const log = await readFile(status.job.logFile, 'utf8');
+  assert.match(log, /Starting Claude/);
+  assert.match(log, /Final output\n.*\n\nP2 app.js/s);
+  assert.equal((await stat(status.job.logFile)).mode & 0o777, 0o600);
+});
+
+test('quiet JSON and retained background activity logs', async (t) => {
+  const f = await fixture(t);
+  const foreground = await f.run(['rescue', '--json', 'inspect'], {
+    FAKE_CLAUDE_MODE: 'activity',
+  });
+  assert.equal(foreground.code, 0);
+  assert.equal(foreground.stderr, '');
+  const foregroundJob = JSON.parse(foreground.stdout).job;
+  const log = await readFile(foregroundJob.logFile, 'utf8');
+  assert.match(log, /Running command: npm test/);
+  assert.match(log, /Command failed: npm test\nExit code 1\nAssertion failed/);
+  for (let index = 0; index < 6; index++) {
+    const expected = `Activity ${index}: ` + 'detail '.repeat(50).trim();
+    assert.ok(log.includes(expected));
+  }
+
+  assert.doesNotMatch(log, /PRIVATE_THINKING/);
+  assert.doesNotMatch(JSON.stringify(foregroundJob.progress), /Activity 0:/);
+  const launched = await f.run(['rescue', '--background', '--json', 'inspect']);
+  const id = JSON.parse(launched.stdout).job.id;
+  const finished = JSON.parse(
+    (await f.run(['status', id, '--wait', '--json'])).stdout,
+  );
+  const path = finished.job.logFile;
+  assert.match(await readFile(path, 'utf8'), /Using Read/);
+  const root = join(
+    f.env.CLAUDE_REVIEW_DATA_DIR,
+    'jobs',
+    fingerprint(f.repo).slice(0, 24),
+  );
+  await pruneJobs(root, { maxCount: 0 });
+  await assert.rejects(access(path), { code: 'ENOENT' });
+});
+
 test('killing a read-only worker also stops its Claude process', async (t) => {
   const f = await fixture(t);
   const worker = spawn(process.execPath, [cli, 'rescue', 'inspect'], {

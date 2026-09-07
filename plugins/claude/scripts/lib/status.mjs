@@ -6,7 +6,7 @@ import {
   progressPhase,
   readProgress,
 } from './progress.mjs';
-import { jobState, listJobs, loadJob, resolveJob } from './store.mjs';
+import { jobPath, jobState, listJobs, loadJob, resolveJob } from './store.mjs';
 
 export function currentSessionId() {
   return process.env.CODEX_THREAD_ID || null;
@@ -21,6 +21,7 @@ export async function jobSnapshot(root, job) {
   const start = Date.parse(job.startedAt || job.createdAt);
   return {
     ...data,
+    logFile: jobPath(root, job.id, 'worker.log'),
     claudeSessionId: job.claudeSessionId || progress.claudeSessionId,
     ...(job.write && ['failed', 'cancelled', 'interrupted'].includes(state)
       ? {
@@ -105,6 +106,7 @@ async function singleStatus(root, options) {
     payload: { job, ...(options.wait ? { waitTimedOut, timeoutMs } : {}) },
     text:
       text +
+      `\nLog: ${job.logFile}` +
       continuation +
       followupActions(job) +
       (job.warning ? `\nWarning: ${job.warning}` : '') +

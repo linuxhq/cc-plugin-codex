@@ -1,5 +1,34 @@
 import { readFile, rename, writeFile } from 'node:fs/promises';
+import { appendFileSync } from 'node:fs';
 import { jobPath, saveJob } from './store.mjs';
+
+// Match upstream's live stderr and retained activity log.
+export function createProgressReporter(root, id, { stderr = false } = {}) {
+  return (update) => {
+    const message = String(update.summary || '').trim();
+    if (!message) return;
+
+    if (stderr) process.stderr.write(`[claude] ${message}\n`);
+
+    appendJobLog(
+      root,
+      id,
+      update.logBody ? `${message}\n${update.logBody}` : message,
+    );
+  };
+}
+
+export function appendFinalOutput(root, job) {
+  appendJobLog(root, job.id, `Final output\n${job.output || job.error || ''}`);
+}
+
+function appendJobLog(root, id, message) {
+  appendFileSync(
+    jobPath(root, id, 'worker.log'),
+    `[${new Date().toISOString()}] ${message}\n`,
+    { mode: 0o600 },
+  );
+}
 
 // Match upstream's phase/thread updates. Heartbeats do not refresh history.
 export function createJobProgressUpdater(root, job) {

@@ -1,6 +1,7 @@
 import { writeFile, rename, access } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const mode = process.env.FAKE_CLAUDE_MODE;
@@ -55,7 +56,12 @@ if (args[0] === '--version') {
       }),
     );
     console.log(JSON.stringify({ type: 'tool_progress', tool_name: 'Read' }));
+    if (mode === 'activity') emitActivity();
   }
+
+  if (mode === 'inspection') await inspectDiff();
+
+  if (process.env.FAKE_CLAUDE_HELPER_ACTIVITY) await spawnHelper();
 
   if (mode === 'slow') await delay(60_000);
 
@@ -127,6 +133,96 @@ if (args[0] === '--version') {
   }
 }
 
+function emitActivity() {
+  for (const event of [
+    {
+      type: 'assistant',
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'test',
+            name: 'Bash',
+            input: { command: 'npm test' },
+          },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'test',
+            is_error: true,
+            content: 'Exit code 1\nAssertion failed',
+          },
+        ],
+      },
+    },
+  ])
+    console.log(JSON.stringify(event));
+
+  for (let index = 0; index < 6; index++) {
+    console.log(
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'PRIVATE_THINKING' },
+            {
+              type: 'text',
+              text: `Activity ${index}: ` + 'detail '.repeat(50),
+            },
+          ],
+        },
+      }),
+    );
+  }
+}
+
+async function spawnHelper() {
+  const child = spawn(
+    process.execPath,
+    [
+      '-e',
+      `
+    const fs = require('node:fs');
+    const path = process.argv[1];
+    process.on('SIGTERM', () => {});
+    setInterval(() => {
+      if (fs.existsSync(path + '.stop')) process.exit(0);
+      fs.writeFileSync(path + '.tmp', JSON.stringify({
+        pid: process.pid, time: Date.now(),
+      }));
+      fs.renameSync(path + '.tmp', path);
+    }, 25);
+  `,
+      process.env.FAKE_CLAUDE_HELPER_ACTIVITY,
+    ],
+    {
+      stdio: [
+        'ignore',
+        ['stdout', 'both'].includes(process.env.FAKE_CLAUDE_HELPER_STDIO)
+          ? 'inherit'
+          : 'ignore',
+        ['stderr', 'both'].includes(process.env.FAKE_CLAUDE_HELPER_STDIO)
+          ? 'inherit'
+          : 'ignore',
+      ],
+    },
+  );
+  await writeFile(
+    process.env.FAKE_CLAUDE_HELPER_ACTIVITY,
+    JSON.stringify({
+      pid: child.pid,
+      time: Date.now(),
+    }),
+  );
+  child.unref();
+}
+
 async function waitForRelease() {
   while (true) {
     try {
@@ -138,4 +234,25 @@ async function waitForRelease() {
 
     await delay(50);
   }
+}
+
+async function inspectDiff() {
+  const config = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
+  const server = config.mcpServers.repository;
+  const child = spawn(server.command, server.args, {
+    stdio: ['pipe', 'pipe', 'inherit'],
+  });
+  child.stdin.end(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'inspect', arguments: { operation: 'diff' } },
+    }) + '\n',
+  );
+  child.stdout.resume();
+  await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
 }

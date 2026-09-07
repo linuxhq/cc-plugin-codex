@@ -22,6 +22,134 @@ const hook = fileURLToPath(
   ),
 );
 
+test('standalone cleanup survives slow runner startup', async (t) => {
+  const f = await fixture(t);
+  const activity = join(f.root, 'standalone-helper.json');
+  let pid = null;
+  f.cleanup(async () => {
+    if (!pid) return;
+
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+  });
+  const preload = join(f.root, 'slow-runner.mjs');
+  await writeFile(
+    preload,
+    `
+    if (process.argv[1]?.endsWith('/process-runner.mjs'))
+      await new Promise((resolve) => setTimeout(resolve, 300));
+  `,
+  );
+  const response = await f.run(['rescue', '--write', '--json', 'inspect'], {
+    CODEX_THREAD_ID: '',
+    FAKE_CLAUDE_HELPER_ACTIVITY: activity,
+    FAKE_CLAUDE_HELPER_STDIO: 'both',
+    NODE_OPTIONS: `--import=${preload}`,
+  });
+  pid = JSON.parse(await readFile(activity)).pid;
+  assert.equal(response.code, 0, response.stdout + response.stderr);
+  assert.match(JSON.parse(response.stdout).output, /Example finding/);
+  await eventually(async () => {
+    const before = await readFile(activity, 'utf8');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    return before === (await readFile(activity, 'utf8'));
+  });
+});
+
+for (const pruned of [false, true]) {
+  test(`session end cleans helpers; pruned=${pruned}`, async (t) => {
+    const f = await fixture(t);
+    const root = join(
+      f.env.CLAUDE_REVIEW_DATA_DIR,
+      'jobs',
+      fingerprint(f.repo).slice(0, 24),
+    );
+    const helpers = [];
+    f.cleanup(async () => {
+      for (const target of helpers.flatMap(({ pid, guardian }) => [
+        pid,
+        guardian,
+      ])) {
+        try {
+          process.kill(target, 'SIGKILL');
+        } catch (error) {
+          if (error.code !== 'ESRCH') throw error;
+        }
+      }
+    });
+    for (const session of ['test-session', 'other-session']) {
+      const activity = join(f.root, `${session}.json`);
+      const response = await f.run(['rescue', '--write', '--json', 'inspect'], {
+        CODEX_THREAD_ID: session,
+        FAKE_CLAUDE_HELPER_ACTIVITY: activity,
+        FAKE_CLAUDE_HELPER_STDIO: pruned ? 'stderr' : 'stdout',
+        FAKE_CLAUDE_MODE: session === 'test-session' ? '' : 'fail',
+      });
+      assert.equal(
+        response.code,
+        session === 'test-session' ? 0 : 1,
+        response.stdout + response.stderr,
+      );
+      const { job } = JSON.parse(response.stdout);
+      assert.equal(
+        job.state,
+        session === 'test-session' ? 'completed' : 'failed',
+      );
+      const pid = await eventually(async () => {
+        try {
+          return JSON.parse(await readFile(activity)).pid;
+        } catch (error) {
+          if (error.code === 'ENOENT') return false;
+
+          throw error;
+        }
+      });
+      const guardian = Number(
+        await readFile(jobPath(root, job.id, 'helper-pid')),
+      );
+      helpers.push({ id: job.id, pid, guardian, activity });
+    }
+
+    if (pruned) await pruneJobs(root, { maxCount: 0 });
+
+    for (const helper of helpers) {
+      const before = await readFile(helper.activity, 'utf8');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.notEqual(await readFile(helper.activity, 'utf8'), before);
+      await access(jobPath(root, helper.id, 'session-id'));
+    }
+
+    const ended = await runProcess(process.execPath, [hook, 'SessionEnd'], {
+      cwd: f.repo,
+      env: f.env,
+      input: JSON.stringify({ cwd: f.repo, session_id: 'test-session' }),
+    });
+    assert.equal(ended.code, 0, ended.stderr);
+    await eventually(async () => {
+      const before = await readFile(helpers[0].activity, 'utf8');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      return before === (await readFile(helpers[0].activity, 'utf8'));
+    });
+    const before = await readFile(helpers[1].activity, 'utf8');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.notEqual(await readFile(helpers[1].activity, 'utf8'), before);
+    await writeFile(helpers[1].activity + '.stop', '');
+    await eventually(async () => {
+      try {
+        await access(jobPath(root, helpers[1].id, 'helper-pid'));
+        return false;
+      } catch (error) {
+        if (error.code === 'ENOENT') return true;
+
+        throw error;
+      }
+    });
+  });
+}
+
 for (const failure of ['ENOENT', 'EISDIR']) {
   test(`cleanup continues after ${failure}`, async (t) => {
     const f = await fixture(t);
