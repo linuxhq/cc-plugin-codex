@@ -24,20 +24,27 @@ export function storeRoot(repo) {
 export function jobPath(root, id, name = 'job.json') {
   if (!/^review-[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid job ID.');
 
-  return join(root, id, name);
+  return name === 'job.json' ? join(root, `${id}.json`) : join(root, id, name);
 }
 
 export async function saveJob(root, job) {
+  job.updatedAt = new Date().toISOString();
+  await mkdir(root, { recursive: true, mode: 0o700 });
   const path = jobPath(root, job.id);
-  const temporary = `${path}.${randomUUID()}.tmp`;
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const data = ['rescue', 'transfer', 'stop-review-gate'].includes(job.command)
     ? { ...job, prompt: undefined }
     : job;
-  await writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, {
-    mode: 0o600,
-  });
-  await rename(temporary, path);
-  if (terminalStates.includes(job.state)) await pruneJobs(root);
+  try {
+    await writeFile(temporary, `${JSON.stringify(data, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+
+  await pruneJobs(root);
 }
 
 export async function createJob(root, details) {
@@ -52,7 +59,6 @@ export async function createJob(root, details) {
     mode: 0o600,
   });
   await saveJob(root, job);
-  await pruneJobs(root);
   return job;
 }
 
@@ -81,12 +87,13 @@ export async function listJobs(root) {
 
   const jobs = await Promise.all(
     entries
-      .filter((id) => /^review-[a-f0-9-]{36}$/.test(id))
+      .filter((name) => /^review-[a-f0-9-]{36}\.json$/.test(name))
+      .map((name) => name.slice(0, -5))
       .map(async (id) => {
         try {
           return await loadJob(root, id);
         } catch (error) {
-          // A concurrent creator may have pruned this finished job.
+          // A concurrent creator may have pruned this job.
           if (error.cause?.code === 'ENOENT') return null;
 
           throw error;
@@ -146,24 +153,61 @@ export async function jobState(root, job) {
   return job.state;
 }
 
-// Active worker records must remain available for cancellation and completion.
+// Match upstream: retain the 50 most recently updated jobs, in any state.
 export async function pruneJobs(root, { maxCount = 50 } = {}) {
   const jobs = await listJobs(root);
-  const finished = [];
-  let activeCount = 0;
-  for (const job of jobs) {
-    if (terminalStates.includes(job.state)) finished.push(job);
-    else if ((await jobState(root, job)) === 'interrupted') {
-      if (await workerExited(root, job)) finished.push(job);
-    } else activeCount++;
-  }
-
-  finished.sort((a, b) => lastActivity(b).localeCompare(lastActivity(a)));
-  const finishedLimit = Math.max(1, maxCount - activeCount);
-  for (const [index, job] of finished.entries()) {
-    if (index >= finishedLimit)
+  jobs.sort((a, b) =>
+    String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')),
+  );
+  for (const job of jobs.slice(maxCount)) {
+    await rm(jobPath(root, job.id), { force: true });
+    await rm(jobPath(root, job.id, 'worker.log'), { force: true });
+    if (terminalStates.includes(job.state))
       await rm(join(root, job.id), { recursive: true, force: true });
   }
+
+  await cleanupAbandonedFiles(root);
+}
+
+// Only reclaim files whose owning process is known to have exited.
+async function cleanupAbandonedFiles(root) {
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+
+    throw error;
+  }
+
+  for (const entry of entries) {
+    const temporary = entry.name.match(
+      /^review-[a-f0-9-]{36}\.json\.(\d+)\.[a-f0-9-]{36}\.tmp$/,
+    );
+    if (entry.isFile() && temporary && processExited(Number(temporary[1]))) {
+      await rm(join(root, entry.name), { force: true });
+    } else if (
+      entry.isDirectory() &&
+      /^review-[a-f0-9-]{36}$/.test(entry.name) &&
+      !(await exists(jobPath(root, entry.name))) &&
+      (await workerExited(root, { id: entry.name }))
+    ) {
+      await rm(join(root, entry.name), { recursive: true, force: true });
+    }
+  }
+}
+
+// Called by the owner after execution stops, including failed startup.
+export async function cleanupWorker(root, id) {
+  if (await exists(jobPath(root, id, 'session-ended')))
+    await removeJob(root, id);
+  else if (!(await exists(jobPath(root, id))))
+    await rm(jobPath(root, id, '.'), { recursive: true, force: true });
+}
+
+export async function removeJob(root, id) {
+  await rm(jobPath(root, id), { force: true });
+  await rm(jobPath(root, id, '.'), { recursive: true, force: true });
 }
 
 // PID reuse or inaccessible processes conservatively retain the record.
@@ -173,11 +217,16 @@ export async function workerExited(root, job) {
   try {
     pid = Number(await readFile(jobPath(root, job.id, 'worker-pid'), 'utf8'));
   } catch (error) {
+    // Cleanup may race with removal of another job's files.
     if (error.code === 'ENOENT') return false;
 
     throw error;
   }
 
+  return processExited(pid);
+}
+
+function processExited(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
 
   try {
@@ -190,19 +239,4 @@ export async function workerExited(root, job) {
 
     throw error;
   }
-}
-
-function lastActivity(job) {
-  return (
-    [
-      job.createdAt,
-      job.startedAt,
-      job.finishedAt,
-      job.updatedAt,
-      job.progress?.updatedAt,
-    ]
-      .filter(Boolean)
-      .sort()
-      .at(-1) || ''
-  );
 }

@@ -9,7 +9,7 @@ import {
 import { jobState, listJobs, loadJob, resolveJob } from './store.mjs';
 
 export function currentSessionId() {
-  return process.env.CODEX_THREAD_ID || process.env.CODEX_SESSION_ID || null;
+  return process.env.CODEX_THREAD_ID || null;
 }
 
 export async function jobSnapshot(root, job) {

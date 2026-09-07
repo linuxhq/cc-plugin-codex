@@ -214,19 +214,20 @@ implementation differences are:
 
 Runtime records are stored outside the checkout under
 `~/.codex/plugins/data/claude-review/jobs/`, grouped by checkout, with private
-permissions. History uses a 50-job budget, keeping the most recently updated
-finished jobs after counting workers with current heartbeats. Completed, failed,
-cancelled, and interrupted records whose recorded worker PID no longer exists
-are eligible for pruning. A stale heartbeat alone is not proof that a worker has
-stopped. Paused workers, legacy records without worker ownership, and records
-whose PID has been reused or cannot be checked are conservatively retained;
-interrupted records do not reduce the finished-history budget. At least one
-finished result is retained even when active workers fill the budget, so the
-latest completion remains retrievable; this can exceed the 50-job budget.
-`CLAUDE_REVIEW_DATA_DIR` overrides that location. Records and Claude's
-persistent rescue, gate, and transfer sessions can contain source code. Review
-restrictions are not an operating-system sandbox. Review supplied content before
-sending it; transcripts and output may retain it.
+permissions. As upstream does, history keeps the 50 most recently updated job
+records, regardless of state. Phase and Claude session changes refresh retention
+order; heartbeat ticks alone do not. Pruning removes history and logs without
+cancelling execution. A running job can return to history on its next phase or
+session change, or when it finishes. Execution control files are kept separately
+while the worker runs so history pruning does not remove cancellation markers or
+heartbeats. Workers clean up execution files when they exit without a retained
+history record. Later pruning reclaims abandoned execution directories and
+temporary job files only when their owning process is known to have exited. Live
+or unverifiable owners are left alone. `CLAUDE_REVIEW_DATA_DIR` overrides that
+location. Records and Claude's persistent rescue, gate, and transfer sessions
+can contain source code. Review restrictions are not an operating-system
+sandbox. Review supplied content before sending it; transcripts and output may
+retain it.
 
 ## Development
 

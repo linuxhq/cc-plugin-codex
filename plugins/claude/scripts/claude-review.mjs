@@ -7,6 +7,7 @@ import {
   launchBackground,
   prepareJob,
   result,
+  jobResult,
   selectJob,
   selectCancelableJob,
   selectResultJob,
@@ -71,7 +72,16 @@ async function main(options) {
 
   console.error(`${job.command} started: ${job.id}`);
   const completed = await executeJob(root, job.id, { prompt: job.prompt });
-  await showResult(root, job.id, options.json);
+  const output = await jobResult(root, completed);
+  emit(
+    {
+      job: await jobSnapshot(root, completed),
+      output: output.text,
+      failed: output.failed,
+    },
+    output.text,
+    options.json,
+  );
   if (completed.state !== 'completed') process.exitCode = 1;
 }
 

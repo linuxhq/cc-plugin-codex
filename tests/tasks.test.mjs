@@ -301,8 +301,7 @@ test('missing session IDs preserve results and discard prompts', async (t) => {
       f.env.CLAUDE_REVIEW_DATA_DIR,
       'jobs',
       fingerprint(f.repo).slice(0, 24),
-      report.job.id,
-      'job.json',
+      `${report.job.id}.json`,
     ),
     'utf8',
   );
@@ -413,7 +412,7 @@ test('rescue accepts stdin with positional precedence', async (t) => {
 
 test('failed rescue resumes outside a host session', async (t) => {
   const f = await fixture(t);
-  const env = { CODEX_THREAD_ID: '', CODEX_SESSION_ID: '' };
+  const env = { CODEX_THREAD_ID: '' };
   const failed = await f.run(['rescue', '--json', 'inspect'], {
     ...env,
     FAKE_CLAUDE_MODE: 'json-error',

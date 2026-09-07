@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Adapted from upstream session-lifecycle-hook.mjs; see ../NOTICE.
-import { rm, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { workspaceRoot } from './lib/git.mjs';
 import { currentSessionId } from './lib/status.mjs';
 import {
   jobPath,
   listJobs,
   loadJob,
+  removeJob,
   storeRoot,
   terminalStates,
   workerExited,
@@ -40,7 +41,7 @@ async function main() {
 
 async function cleanupJob(root, job) {
   if (terminalStates.includes(job.state) || (await workerExited(root, job))) {
-    await rm(jobPath(root, job.id, '.'), { recursive: true, force: true });
+    await removeJob(root, job.id);
   } else {
     // The worker owns its child process and removes its records after stopping.
     await writeFile(jobPath(root, job.id, 'session-ended'), '', {
@@ -57,7 +58,7 @@ async function cleanupJob(root, job) {
       throw error;
     });
     if (latest && terminalStates.includes(latest.state))
-      await rm(jobPath(root, job.id, '.'), { recursive: true, force: true });
+      await removeJob(root, job.id);
   }
 }
 

@@ -13,10 +13,10 @@ node "/absolute/plugin/root/scripts/claude-review.mjs" transfer
 ```
 
 The runtime locates the current Codex session transcript using CODEX_THREAD_ID
-or CODEX_SESSION_ID under CODEX_HOME (default ~/.codex). The user may select a
-specific Codex JSONL transcript with `--source PATH` instead. The source must
-resolve under `CODEX_HOME/sessions` or `CODEX_HOME/archived_sessions`; symlinks
-to transcripts there are accepted.
+under CODEX_HOME (default ~/.codex). The user may select a specific Codex JSONL
+transcript with `--source PATH` instead. The source must resolve under
+`CODEX_HOME/sessions` or `CODEX_HOME/archived_sessions`; symlinks to transcripts
+there are accepted.
 
 If the transcript is unavailable, report the runtime error and the `--source`
 guidance. Return the result and `claude --resume SESSION_ID` command verbatim.

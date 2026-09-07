@@ -1,9 +1,28 @@
-import { rm, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 import { reviewWithClaude, validatePrompt } from './claude.mjs';
-import { exists, jobPath, loadJob, saveJob, terminalStates } from './store.mjs';
-import { saveProgress, updateProgress } from './progress.mjs';
+import {
+  exists,
+  jobPath,
+  loadJob,
+  cleanupWorker,
+  saveJob,
+  terminalStates,
+} from './store.mjs';
+import {
+  createJobProgressUpdater,
+  saveProgress,
+  updateProgress,
+} from './progress.mjs';
 
 export async function executeJob(root, id, { prompt } = {}) {
+  try {
+    return await runJob(root, id, prompt);
+  } finally {
+    await cleanupWorker(root, id);
+  }
+}
+
+async function runJob(root, id, prompt) {
   const job = await loadJob(root, id);
   if (terminalStates.includes(job.state)) return job;
 
@@ -18,7 +37,7 @@ export async function executeJob(root, id, { prompt } = {}) {
       summary: 'Starting Claude.',
     },
   );
-  const stopMonitor = monitor(root, id, controller, () => progress);
+  let stopMonitor = async () => {};
 
   try {
     if (prompt) job.prompt = prompt;
@@ -31,6 +50,7 @@ export async function executeJob(root, id, { prompt } = {}) {
     job.state = 'running';
     job.startedAt = new Date().toISOString();
     await saveJob(root, job);
+    stopMonitor = monitor(root, job, controller, () => progress);
     job.output = await reviewWithClaude(job, controller.signal, (update) => {
       progress = updateProgress(progress, update);
     });
@@ -53,9 +73,6 @@ export async function executeJob(root, id, { prompt } = {}) {
     summary: finalSummary(job),
   });
   await saveJob(root, job);
-  if (await exists(jobPath(root, id, 'session-ended')))
-    await rm(jobPath(root, id, '.'), { recursive: true, force: true });
-
   return job;
 }
 
@@ -69,7 +86,9 @@ function finalSummary(job) {
     .find((line) => line.trim());
 }
 
-function monitor(root, id, controller, progress) {
+function monitor(root, job, controller, progress) {
+  const { id } = job;
+  const updateJob = createJobProgressUpdater(root, job);
   let stopped = false;
   let timer;
   let pending = Promise.resolve();
@@ -77,7 +96,9 @@ function monitor(root, id, controller, progress) {
     await writeFile(jobPath(root, id, 'heartbeat'), '', { mode: 0o600 });
     if (await exists(jobPath(root, id, 'cancel'))) controller.abort();
 
-    await saveProgress(root, id, progress());
+    const current = progress();
+    await saveProgress(root, id, current);
+    await updateJob(current);
   };
   const schedule = () => {
     pending = tick()

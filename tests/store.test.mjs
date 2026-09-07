@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
-import { utimes, writeFile } from 'node:fs/promises';
+import { access, readdir, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
-import { spawn } from 'node:child_process';
 import {
   createJob,
   jobPath,
@@ -13,72 +12,13 @@ import {
   saveJob,
   storeRoot,
 } from '../plugins/claude/scripts/lib/store.mjs';
-import { fixture } from './helpers.mjs';
-
-test('retention preserves stale workers and the latest result', async (t) => {
-  const f = await fixture(t);
-  const root = join(f.root, 'store');
-  const stale = await createJob(root, { repo: f.repo });
-  await saveJob(root, { ...stale, createdAt: new Date(0).toISOString() });
-  const completed = await createJob(root, { repo: f.repo });
-  await saveJob(root, { ...completed, state: 'completed' });
-  await pruneJobs(root, { maxCount: 1 });
-  assert.equal((await loadJob(root, stale.id)).state, 'queued');
-  assert.equal((await loadJob(root, completed.id)).state, 'completed');
-});
-
-test('full active budget retains the latest result', async (t) => {
-  const f = await fixture(t);
-  const root = join(f.root, 'store');
-  const active = await createJob(root, { repo: f.repo });
-  const completed = await createJob(root, { repo: f.repo });
-  await saveJob(root, { ...completed, state: 'completed' });
-  await pruneJobs(root, { maxCount: 1 });
-  assert.equal((await loadJob(root, active.id)).state, 'queued');
-  assert.equal((await loadJob(root, completed.id)).state, 'completed');
-});
-
-test('dead workers share the bounded history budget', async (t) => {
-  const f = await fixture(t);
-  const root = join(f.root, 'store');
-  const worker = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
-  await new Promise((resolve) => worker.once('exit', resolve));
-  const dead = [];
-  for (let i = 0; i < 50; i++) {
-    const job = await createJob(root, { repo: f.repo });
-    await writeFile(jobPath(root, job.id, 'worker-pid'), String(worker.pid));
-    await saveJob(root, { ...job, createdAt: new Date(i).toISOString() });
-    dead.push(job);
-  }
-
-  const completed = [];
-  for (let i = 0; i < 3; i++) {
-    const job = await createJob(root, { repo: f.repo });
-    await saveJob(root, { ...job, state: 'completed' });
-    completed.push(job);
-  }
-
-  const retained = await listJobs(root);
-  assert.equal(retained.length, 50);
-  for (const job of completed)
-    assert.ok(retained.some((entry) => entry.id === job.id));
-
-  await assert.rejects(loadJob(root, dead[0].id), /Job not found/);
-});
-
-test('stale workers do not crowd out results', async (t) => {
-  const f = await fixture(t);
-  const root = join(f.root, 'store');
-  const paused = await createJob(root, { repo: f.repo });
-  await saveJob(root, { ...paused, createdAt: new Date(0).toISOString() });
-  for (let i = 0; i < 2; i++) {
-    const job = await createJob(root, { repo: f.repo });
-    await saveJob(root, { ...job, state: 'completed' });
-  }
-
-  await pruneJobs(root, { maxCount: 2 });
-  assert.equal((await listJobs(root)).length, 3);
-});
+import {
+  createJobProgressUpdater,
+  saveProgress,
+} from '../plugins/claude/scripts/lib/progress.mjs';
+import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
+import { spawn } from 'node:child_process';
+import { fixture, eventually } from './helpers.mjs';
 
 test('heartbeats distinguish stale jobs from active jobs', async (t) => {
   const f = await fixture(t);
@@ -108,48 +48,48 @@ test('separate checkouts receive separate job stores', () => {
   assert.notEqual(storeRoot('/repo'), storeRoot('/repo-worktree'));
 });
 
-test('retention prunes finished jobs and preserves active jobs', async (t) => {
+test('retention applies one 50-job limit to every state', async (t) => {
   const f = await fixture(t);
   const root = join(f.root, 'store');
-  const active = await createJob(root, { repo: f.repo });
-  const finished = [];
-  for (let i = 0; i < 4; i++) {
+  const jobs = [];
+  const states = ['running', 'completed', 'queued', 'failed', 'cancelled'];
+  for (let i = 0; i < 50; i++) {
     const job = await createJob(root, { repo: f.repo });
-    job.state = 'completed';
-    job.createdAt = new Date(Date.now() - i * 1000).toISOString();
-    await saveJob(root, job);
-    finished.push(job);
+    await writeFile(
+      jobPath(root, job.id),
+      JSON.stringify({
+        ...job,
+        state: states[i % states.length],
+        updatedAt: new Date(i).toISOString(),
+      }),
+    );
+    jobs.push(job);
   }
 
-  await pruneJobs(root, { maxCount: 2 });
-  assert.deepEqual(
-    new Set((await listJobs(root)).map((job) => job.id)),
-    new Set([active.id, finished[0].id]),
-  );
-  finished[0].finishedAt = new Date(0).toISOString();
-  await saveJob(root, finished[0]);
   await createJob(root, { repo: f.repo });
-  assert.equal((await loadJob(root, finished[0].id)).state, 'completed');
-  assert.equal((await loadJob(root, active.id)).state, 'queued');
+  assert.equal((await listJobs(root)).length, 50);
+  await assert.rejects(loadJob(root, jobs[0].id), /Job not found/);
+  await createJob(root, { repo: f.repo });
+  assert.equal((await listJobs(root)).length, 50);
+  await assert.rejects(loadJob(root, jobs[1].id), /Job not found/);
 });
 
-test('retention keeps recent completions', async (t) => {
+test('saving a job refreshes its retention order', async (t) => {
   const f = await fixture(t);
   const root = join(f.root, 'store');
   const older = await createJob(root, { repo: f.repo });
   const newer = await createJob(root, { repo: f.repo });
-  await saveJob(root, {
-    ...newer,
-    state: 'completed',
-    createdAt: '2026-01-02T00:00:00Z',
-    finishedAt: '2026-01-03T00:00:00Z',
-  });
-  await saveJob(root, {
-    ...older,
-    state: 'completed',
-    createdAt: '2026-01-01T00:00:00Z',
-    finishedAt: '2026-01-04T00:00:00Z',
-  });
+  for (const [index, job] of [older, newer].entries()) {
+    await writeFile(
+      jobPath(root, job.id),
+      JSON.stringify({
+        ...job,
+        updatedAt: new Date(index).toISOString(),
+      }),
+    );
+  }
+
+  await saveJob(root, { ...older, state: 'completed' });
   await pruneJobs(root, { maxCount: 1 });
   assert.deepEqual(
     (await listJobs(root)).map((job) => job.id),
@@ -157,20 +97,172 @@ test('retention keeps recent completions', async (t) => {
   );
 });
 
-test('retention enforces the 50-job limit after completion', async (t) => {
+for (const updatedAt of [undefined, null, 0]) {
+  test(`upstream timestamp coercion: ${updatedAt}`, async (t) => {
+    const f = await fixture(t);
+    const root = join(f.root, 'store');
+    const missing = await createJob(root, { repo: f.repo });
+    await writeFile(
+      jobPath(root, missing.id),
+      JSON.stringify({
+        ...missing,
+        updatedAt,
+      }),
+    );
+    const current = await createJob(root, { repo: f.repo });
+    await saveJob(root, current);
+    await pruneJobs(root, { maxCount: 1 });
+    assert.deepEqual(
+      (await listJobs(root)).map((job) => job.id),
+      [current.id],
+    );
+  });
+}
+
+test('only phase and session changes refresh history', async (t) => {
   const f = await fixture(t);
   const root = join(f.root, 'store');
-  const active = await createJob(root, { repo: f.repo });
-  for (let i = 0; i < 51; i++) {
-    const job = await createJob(root, { repo: f.repo });
-    await saveJob(root, {
-      ...job,
-      state: 'completed',
-      finishedAt: new Date(Date.now() + i * 1000).toISOString(),
-    });
-  }
+  const job = await createJob(root, { repo: f.repo, state: 'running' });
+  const update = createJobProgressUpdater(root, job);
+  await update({ phase: 'starting' });
+  const stamp = async () => {
+    await writeFile(
+      jobPath(root, job.id),
+      JSON.stringify({
+        ...(await loadJob(root, job.id)),
+        updatedAt: new Date(0).toISOString(),
+      }),
+    );
+  };
+  await stamp();
+  await saveProgress(root, job.id, { phase: 'starting', summary: 'A tick' });
+  await update({ phase: 'starting', summary: 'Another message' });
+  assert.equal(
+    (await loadJob(root, job.id)).updatedAt,
+    new Date(0).toISOString(),
+  );
+  await update({ phase: 'reviewing' });
+  assert.notEqual(
+    (await loadJob(root, job.id)).updatedAt,
+    new Date(0).toISOString(),
+  );
+  await stamp();
+  await update({ phase: 'reviewing', claudeSessionId: 'session' });
+  assert.notEqual(
+    (await loadJob(root, job.id)).updatedAt,
+    new Date(0).toISOString(),
+  );
+  await pruneJobs(root, { maxCount: 0 });
+  await update({ phase: 'reviewing', claudeSessionId: 'session' });
+  assert.deepEqual(await listJobs(root), []);
+  await update({ phase: 'output', claudeSessionId: 'session' });
+  assert.equal((await loadJob(root, job.id)).phase, 'output');
+});
 
-  const retained = await listJobs(root);
-  assert.equal(retained.length, 50);
-  assert.ok(retained.some((job) => job.id === active.id));
+for (const operation of ['writeFile', 'rename']) {
+  test(`a save survives pruning during ${operation}`, async (t) => {
+    const f = await fixture(t);
+    const root = join(f.root, 'store');
+    const job = await createJob(root, { repo: f.repo });
+    const module = new URL(
+      '../plugins/claude/scripts/lib/store.mjs',
+      import.meta.url,
+    ).href;
+    const script = join(f.root, 'save-race.mjs');
+    await writeFile(
+      script,
+      `
+      import fs from 'node:fs/promises';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { saveJob, pruneJobs } from ${JSON.stringify(module)};
+      const original = fs.${operation};
+      fs.${operation} = async (...args) => {
+        fs.${operation} = original;
+        syncBuiltinESMExports();
+        await pruneJobs(${JSON.stringify(root)}, { maxCount: 0 });
+        return original(...args);
+      };
+      syncBuiltinESMExports();
+      const job = ${JSON.stringify({ ...job, state: 'completed' })};
+      await saveJob(${JSON.stringify(root)}, job);
+    `,
+    );
+    const run = await runProcess(process.execPath, [script]);
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal((await loadJob(root, job.id)).state, 'completed');
+    assert.ok(!(await readdir(root)).some((name) => name.endsWith('.tmp')));
+  });
+}
+
+for (const owner of ['exited', 'live', 'inaccessible']) {
+  test(`orphan cleanup with ${owner} owner`, async (t) => {
+    const f = await fixture(t);
+    const root = join(f.root, 'store');
+    const job = await createJob(root, { repo: f.repo });
+    await writeFile(jobPath(root, job.id, 'prompt.json'), 'private prompt');
+    t.mock.method(process, 'kill', (pid, signal) => {
+      assert.equal(pid, process.pid);
+      assert.equal(signal, 0);
+      if (owner === 'live') return true;
+
+      throw Object.assign(new Error(owner), {
+        code: owner === 'exited' ? 'ESRCH' : 'EPERM',
+      });
+    });
+    await pruneJobs(root, { maxCount: 0 });
+    assert.deepEqual(await listJobs(root), []);
+    const payload = jobPath(root, job.id, 'prompt.json');
+    if (owner === 'exited')
+      await assert.rejects(access(payload), { code: 'ENOENT' });
+    else await access(payload);
+  });
+}
+
+test('pruning reclaims dead writers and preserves live writes', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const job = await createJob(root, { repo: f.repo });
+  const module = new URL(
+    '../plugins/claude/scripts/lib/store.mjs',
+    import.meta.url,
+  ).href;
+  const script = join(f.root, 'interrupted-save.mjs');
+  await writeFile(
+    script,
+    `
+    import fs from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { saveJob } from ${JSON.stringify(module)};
+    await fs.writeFile(${JSON.stringify(jobPath(root, job.id, 'worker-pid'))},
+      String(process.pid));
+    setInterval(() => {}, 1000);
+    fs.rename = async (from) => {
+      process.stdout.write(from + '\\n');
+      await new Promise(() => {});
+    };
+    syncBuiltinESMExports();
+    await saveJob(${JSON.stringify(root)}, ${JSON.stringify(job)});
+  `,
+  );
+  const worker = spawn(process.execPath, [script], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const exited = new Promise((resolve) => worker.once('close', resolve));
+  f.cleanup(async () => {
+    worker.kill('SIGKILL');
+    await exited;
+  });
+  let output = '';
+  worker.stdout.on('data', (chunk) => {
+    output += chunk;
+  });
+  await eventually(() => output.includes('\n'));
+  const temporary = output.trim();
+  await pruneJobs(root, { maxCount: 0 });
+  await access(temporary);
+  await access(jobPath(root, job.id, '.'));
+  worker.kill('SIGKILL');
+  await exited;
+  await pruneJobs(root);
+  assert.deepEqual(await readdir(root), []);
 });

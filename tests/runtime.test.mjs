@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
-import { readFile, readdir } from 'node:fs/promises';
+import { access, readFile, readdir, writeFile, stat } from 'node:fs/promises';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
+import { join } from 'node:path';
+import { fingerprint } from '../plugins/claude/scripts/lib/git.mjs';
+import {
+  createJob,
+  jobPath,
+  loadJob,
+  pruneJobs,
+} from '../plugins/claude/scripts/lib/store.mjs';
 import { fixture, extractId, eventually, cli } from './helpers.mjs';
 import { spawn } from 'node:child_process';
 
@@ -228,4 +238,127 @@ test('unexpected review shape preserves provider status', async (t) => {
   assert.match(run.stdout, /Missing string `summary`/);
   assert.match(run.stdout, /Raw final message/);
   assert.match((await f.run(['status'])).stdout, /completed/);
+});
+
+for (const mode of ['foreground', 'background']) {
+  test(`${mode} execution completes after history eviction`, async (t) => {
+    const f = await fixture(t);
+    const release = join(f.root, 'release');
+    const root = join(
+      f.env.CLAUDE_REVIEW_DATA_DIR,
+      'jobs',
+      fingerprint(f.repo).slice(0, 24),
+    );
+    const args = ['rescue', '--json', 'inspect'];
+    if (mode === 'background') args.push('--background');
+
+    const run = f.run(args, {
+      FAKE_CLAUDE_MODE: 'held',
+      FAKE_CLAUDE_RELEASE: release,
+    });
+    f.cleanup(async () => {
+      await writeFile(release, '');
+      await run;
+    });
+    let id;
+    await eventually(async () => {
+      const report = JSON.parse((await f.run(['status', '--json'])).stdout);
+      const job = report.running?.find(
+        (entry) => entry.progress.summary === 'Using Read.',
+      );
+      id = job?.id;
+      return id && (await loadJob(root, id)).phase === job.progress.phase;
+    });
+    const { pid } = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+    await pruneJobs(root, { maxCount: 0 });
+    await assert.rejects(loadJob(root, id), /Job not found/);
+    const heartbeat = jobPath(root, id, 'heartbeat');
+    const before = (await stat(heartbeat)).mtimeMs;
+    await eventually(async () => (await stat(heartbeat)).mtimeMs > before);
+    process.kill(pid, 0);
+    await assert.rejects(loadJob(root, id), /Job not found/);
+    await writeFile(release, '');
+    const response = await run;
+    assert.equal(response.code, 0, response.stderr);
+    await eventually(async () => {
+      try {
+        return (await loadJob(root, id)).state === 'completed';
+      } catch (error) {
+        if (error.cause?.code === 'ENOENT') return false;
+
+        throw error;
+      }
+    });
+    const result = await f.run(['result', id, '--json']);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).job.state, 'completed');
+  });
+}
+
+test('foreground output survives completion eviction', async (t) => {
+  const f = await fixture(t);
+  const preload = join(f.root, 'prune-completion.mjs');
+  await writeFile(
+    preload,
+    `
+    import fs from 'node:fs/promises';
+    import { syncBuiltinESMExports } from 'node:module';
+    const rename = fs.rename;
+    fs.rename = async (from, to) => {
+      await rename(from, to);
+      if (!/review-[a-f0-9-]{36}\\.json$/.test(to)) return;
+      const job = JSON.parse(await fs.readFile(to, 'utf8'));
+      if (job.state === 'completed') await fs.rm(to);
+    };
+    syncBuiltinESMExports();
+  `,
+  );
+  const response = await f.run(['rescue', '--json', 'inspect'], {
+    NODE_OPTIONS: `--import=${preload}`,
+  });
+  assert.equal(response.code, 0, response.stderr);
+  const report = JSON.parse(response.stdout);
+  assert.equal(report.job.state, 'completed');
+  assert.ok(report.output);
+  const missing = await f.run(['result', report.job.id]);
+  assert.equal(missing.code, 1);
+  assert.match(missing.stderr, /Job not found/);
+  const root = join(
+    f.env.CLAUDE_REVIEW_DATA_DIR,
+    'jobs',
+    fingerprint(f.repo).slice(0, 24),
+  );
+  await assert.rejects(access(jobPath(root, report.job.id, '.')), {
+    code: 'ENOENT',
+  });
+});
+
+test('failed startup after eviction removes execution files', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const job = await createJob(root, { repo: f.repo, command: 'rescue' });
+  await writeFile(
+    jobPath(root, job.id, 'prompt.json'),
+    JSON.stringify({
+      system: 'Investigate.',
+      input: 'Inspect the repository.',
+    }),
+  );
+  await pruneJobs(root, { maxCount: 0 });
+  const worker = new URL(
+    '../plugins/claude/scripts/worker.mjs',
+    import.meta.url,
+  );
+  const run = await runProcess(
+    process.execPath,
+    [fileURLToPath(worker), root, job.id],
+    {
+      cwd: f.repo,
+      env: f.env,
+    },
+  );
+  assert.equal(run.code, 1);
+  assert.match(run.stderr, /Job not found/);
+  assert.deepEqual(await readdir(root), []);
+  await assert.rejects(access(f.env.FAKE_CLAUDE_CAPTURE), { code: 'ENOENT' });
 });

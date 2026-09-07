@@ -11,7 +11,6 @@ import {
   createJob,
   saveJob,
   listJobs,
-  pruneJobs,
   jobPath,
 } from '../plugins/claude/scripts/lib/store.mjs';
 
@@ -103,7 +102,7 @@ test('session end removes records of workers that exited', async (t) => {
   await assert.rejects(access(jobPath(root, job.id)), { code: 'ENOENT' });
 });
 
-test('paused workers survive pruning and finish session cleanup', async (t) => {
+test('paused workers stop after session end', async (t) => {
   const f = await fixture(t);
   const worker = spawn(process.execPath, [cli, 'rescue', 'inspect'], {
     cwd: f.repo,
@@ -141,9 +140,6 @@ test('paused workers survive pruning and finish session cleanup', async (t) => {
   worker.kill('SIGSTOP');
   const past = new Date(Date.now() - 60_000);
   await utimes(jobPath(root, job.id, 'heartbeat'), past, past);
-  const finished = await createJob(root, { repo: f.repo });
-  await saveJob(root, { ...finished, state: 'completed' });
-  await pruneJobs(root, { maxCount: 1 });
   await access(jobPath(root, job.id));
   const run = await runProcess(process.execPath, [hook, 'SessionEnd'], {
     cwd: f.repo,
@@ -153,8 +149,20 @@ test('paused workers survive pruning and finish session cleanup', async (t) => {
   assert.equal(run.code, 0, run.stderr);
   await access(jobPath(root, job.id));
   await access(jobPath(root, job.id, 'cancel'));
+
   worker.kill('SIGCONT');
   await exited;
+  const { pid } = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
+  await eventually(() => {
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      if (error.code === 'ESRCH') return true;
+
+      throw error;
+    }
+  });
   await assert.rejects(
     access(jobPath(root, job.id)),
     { code: 'ENOENT' },
@@ -214,7 +222,7 @@ test('session end cleans up its own jobs', async (t) => {
       return error.code === 'ENOENT';
     }
   });
-  await access(join(root, foreign.id, 'job.json'));
+  await access(jobPath(root, foreign.id));
   assert.equal(
     JSON.parse(await readFile(join(root, 'gate.json'))).enabled,
     true,
@@ -256,7 +264,7 @@ test('session end requests cancellation for stale workers', async (t) => {
     input: JSON.stringify({ cwd: f.repo, session_id: 'test-session' }),
   });
   assert.equal(run.code, 0, run.stderr);
-  await access(join(root, job.id, 'job.json'));
+  await access(jobPath(root, job.id));
   await access(join(root, job.id, 'session-ended'));
   await access(join(root, job.id, 'cancel'));
 });

@@ -1,5 +1,25 @@
 import { readFile, rename, writeFile } from 'node:fs/promises';
-import { jobPath } from './store.mjs';
+import { jobPath, saveJob } from './store.mjs';
+
+// Match upstream's phase/thread updates. Heartbeats do not refresh history.
+export function createJobProgressUpdater(root, job) {
+  let phase;
+  let sessionId;
+  return async (progress) => {
+    const changed =
+      (progress.phase && progress.phase !== phase) ||
+      (progress.claudeSessionId && progress.claudeSessionId !== sessionId);
+    if (!changed) return;
+
+    phase = progress.phase || phase;
+    sessionId = progress.claudeSessionId || sessionId;
+    await saveJob(root, {
+      ...job,
+      phase,
+      claudeSessionId: sessionId || job.claudeSessionId,
+    });
+  };
+}
 
 export function updateProgress(previous, update) {
   const summary = String(update.summary || '')

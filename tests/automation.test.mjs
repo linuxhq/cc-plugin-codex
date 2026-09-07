@@ -18,6 +18,18 @@ import {
 const rootFor = (f) =>
   join(f.env.CLAUDE_REVIEW_DATA_DIR, 'jobs', fingerprint(f.repo).slice(0, 24));
 
+test('session scope uses only CODEX_THREAD_ID', async (t) => {
+  const f = await fixture(t);
+  for (const thread of ['current-thread', '']) {
+    const run = await f.run(['status', '--json'], {
+      CODEX_THREAD_ID: thread,
+      CODEX_SESSION_ID: 'alternate-session',
+    });
+    assert.equal(run.code, 0, run.stderr);
+    assert.equal(JSON.parse(run.stdout).sessionId, thread || null);
+  }
+});
+
 test('result explains when an explicit job is still active', async (t) => {
   const f = await fixture(t);
   const job = await createJob(rootFor(f), {

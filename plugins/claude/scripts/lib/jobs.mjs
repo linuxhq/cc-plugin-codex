@@ -170,7 +170,11 @@ export async function cancelJob(root, id) {
 }
 
 export async function result(root, id) {
-  const job = await jobSnapshot(root, await selectResultJob(root, id));
+  return jobResult(root, await selectResultJob(root, id));
+}
+
+export async function jobResult(root, completed) {
+  const job = await jobSnapshot(root, completed);
   const state = await jobState(root, job);
   const continuation = job.claudeSessionId
     ? `\nClaude session: ${job.claudeSessionId}\n` +

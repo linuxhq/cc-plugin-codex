@@ -1,4 +1,4 @@
-import { writeFile, rename } from 'node:fs/promises';
+import { writeFile, rename, access } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 
@@ -59,6 +59,8 @@ if (args[0] === '--version') {
 
   if (mode === 'slow') await delay(60_000);
 
+  if (mode === 'held') await waitForRelease();
+
   if (mode === 'fail' || mode === 'unauthenticated') {
     console.error(
       mode === 'fail' ? 'Provider unavailable' : 'Not authenticated',
@@ -116,5 +118,18 @@ if (args[0] === '--version') {
             : '## Findings\n\nP2 app.js:1 — Example finding from fake CLI.'),
       }),
     );
+  }
+}
+
+async function waitForRelease() {
+  while (true) {
+    try {
+      await access(process.env.FAKE_CLAUDE_RELEASE);
+      return;
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+
+    await delay(50);
   }
 }
