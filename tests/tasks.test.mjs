@@ -14,7 +14,6 @@ test('task options reject conflicting modes and preserve literal input', () => {
     ['rescue', '--fresh', '--resume'],
     ['rescue', '--fresh', '--resume-last'],
     ['rescue', '--wait', '--background'],
-    ['rescue', '--resume-job', ''],
     ['transfer', '--write'],
     ['transfer', '--source', 'a', '--prompt-file', 'b'],
     ['transfer', 'unexpected'],
@@ -57,15 +56,23 @@ test('rescue persistence and explicit write access', async (t) => {
   capture = JSON.parse(await readFile(f.env.FAKE_CLAUDE_CAPTURE));
   assert.equal(option('--resume'), saved.job.claudeSessionId);
   assert.ok(!capture.args.includes('--fork-session'));
-  assert.equal(option('--tools'), 'Read,Glob,Grep,Edit,Write,Bash');
+  for (const flag of [
+    '--tools',
+    '--allowedTools',
+    '--strict-mcp-config',
+    '--mcp-config',
+    '--setting-sources',
+    '--disable-slash-commands',
+  ])
+    assert.ok(!capture.args.includes(flag), flag);
+
   const settings = JSON.parse(option('--settings'));
-  assert.equal(settings.disableAllHooks, true);
+  assert.equal(settings.disableAllHooks, undefined);
   assert.equal(settings.sandbox.enabled, true);
   assert.equal(settings.sandbox.failIfUnavailable, true);
   assert.equal(settings.sandbox.allowUnsandboxedCommands, false);
   assert.equal(option('--permission-mode'), 'acceptEdits');
   assert.ok(!capture.args.includes('--dangerously-skip-permissions'));
-  assert.deepEqual(JSON.parse(option('--mcp-config')), { mcpServers: {} });
   const nextJob = JSON.parse(next.stdout).job;
   assert.equal(nextJob.claudeSessionId, saved.job.claudeSessionId);
   const third = await f.run(['rescue', '--resume', '--json', 'inspect fix']);
@@ -92,11 +99,8 @@ test('empty tasks and nonpersistent reviews cannot be resumed', async (t) => {
   const f = await fixture(t);
   assert.equal((await f.run(['rescue'])).code, 1);
   assert.equal((await f.run(['rescue', '--resume', 'continue'])).code, 1);
-  const review = JSON.parse((await f.run(['review', '--json'])).stdout);
-  assert.equal(
-    (await f.run(['rescue', '--resume-job', review.job.id, 'continue'])).code,
-    1,
-  );
+  await f.run(['review', '--json']);
+  assert.equal((await f.run(['rescue', '--resume', 'continue'])).code, 1);
 });
 
 test('background rescue checks availability before launch', async (t) => {
@@ -313,23 +317,13 @@ test('transferred context cannot become a rescue continuation', async (t) => {
   const f = await fixture(t);
   const source = await transcriptSource(f);
   await writeFile(source, transcript());
-  const transfer = JSON.parse(
-    (await f.run(['transfer', '--source', source, '--json'])).stdout,
-  );
+  await f.run(['transfer', '--source', source, '--json']);
   assert.deepEqual(
     JSON.parse((await f.run(['rescue-resume-candidate', '--json'])).stdout),
     { available: false },
   );
   assert.equal(
-    (
-      await f.run([
-        'rescue',
-        '--resume-job',
-        transfer.job.id,
-        '--write',
-        'continue',
-      ])
-    ).code,
+    (await f.run(['rescue', '--resume', '--write', 'continue'])).code,
     1,
   );
 });
@@ -471,9 +465,16 @@ test('resume waits for active rescue and accepts cancelled jobs', async (t) => {
   );
 });
 
-test('removed extension flags are rejected', () => {
+test('removed rescue options stay text; transfer rejects extra flags', () => {
+  const task = parseCommand([
+    'rescue',
+    '--resume-job',
+    'review-ab',
+    'continue',
+  ]);
+  assert.equal(task.focus, '--resume-job review-ab continue');
+  assert.equal(task.resume, undefined);
   for (const args of [
-    ['rescue', '--resume-job', 'review-ab', 'continue'],
     ['transfer', '--prompt-file', 'summary.txt'],
     ['transfer', '--background'],
     ['transfer', '--model', 'sonnet'],

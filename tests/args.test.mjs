@@ -43,6 +43,48 @@ test('option values and passthrough text are never boolean-normalized', () => {
   assert.equal(parseCommand(['rescue', '-m', 'name=a=b']).model, 'name=a=b');
 });
 
+test('upstream option spellings select directory, model, and mode', () => {
+  for (const cwdFlag of ['--cwd', '-cwd', '-C', '--C']) {
+    for (const modelFlag of ['--model', '-model', '-m', '--m']) {
+      const task = parseCommand([
+        'rescue',
+        cwdFlag,
+        '/tmp/target',
+        modelFlag,
+        'sonnet',
+        '-write',
+        'fix',
+      ]);
+      assert.equal(task.cwd, '/tmp/target');
+      assert.equal(task.model, 'sonnet');
+      assert.equal(task.write, true);
+      assert.equal(task.focus, 'fix');
+    }
+  }
+
+  const review = parseCommand(['review', '--C=/tmp/target', '--m=sonnet']);
+  assert.equal(review.cwd, '/tmp/target');
+  assert.equal(review.model, 'sonnet');
+  assert.throws(() => parseCommand(['rescue', '-model']));
+});
+
+test('inline values use upstream splitting at an extra equals sign', () => {
+  const task = parseCommand([
+    'rescue',
+    '--write',
+    '--write=false=extra',
+    '--json=false=extra',
+    '--model=sonnet=extra',
+    'inspect',
+  ]);
+  assert.equal(task.write, false);
+  assert.equal(task.json, false);
+  assert.equal(task.model, 'sonnet');
+  assert.equal(task.focus, 'inspect');
+  assert.equal(parseCommand(['rescue', '--write=true=extra']).write, true);
+  assert.equal(parseCommand(['rescue', '--write=']).write, true);
+});
+
 test('review defaults preserve Claude model and effort configuration', () => {
   const options = parseCommand(['review']);
   assert.equal(options.scope, 'auto');
@@ -68,7 +110,6 @@ for (const args of [
   ['review', '--scope', 'staged'],
   ['review', 'custom focus'],
   ['review', '--focus-file', 'focus.txt'],
-  ['adversarial-review', '--focus-file', 'focus.txt'],
   ['review', '--effort', 'minimal'],
   ['review', '--unknown'],
   ['status', '--wait'],
@@ -124,11 +165,42 @@ test('status accepts upstream timing controls without requiring wait', () => {
   }
 });
 
-test('upstream setup and review commands reject extra feature flags', () => {
+test('setup and correctness review reject unsupported flags', () => {
   assert.throws(() => parseCommand(['setup', '--install']));
-  for (const command of ['review', 'adversarial-review']) {
+  for (const command of ['review']) {
     for (const effort of ['low', 'medium', 'high', 'xhigh', 'max']) {
       assert.throws(() => parseCommand([command, '--effort', effort]));
     }
   }
+});
+
+test('task and focus text preserve unknown options in upstream order', () => {
+  for (const command of ['rescue', 'adversarial-review']) {
+    const options = parseCommand([
+      command,
+      'Explain',
+      '--force',
+      '-xyz',
+      '--setting=a=b',
+      '--constructor',
+      '--model',
+      'sonnet',
+      'behavior',
+      '--',
+      '--model',
+      'literal',
+    ]);
+    assert.equal(options.model, 'sonnet');
+    assert.equal(
+      options.focus,
+      'Explain --force -xyz --setting=a=b --constructor behavior ' +
+        '--model literal',
+    );
+    assert.equal(Object.hasOwn(options, 'force'), false);
+    assert.throws(() => parseCommand([command, '--model']));
+  }
+
+  const review = parseCommand(['adversarial-review', '--effort', 'high']);
+  assert.equal(review.focus, '--effort high');
+  assert.equal(review.effort, undefined);
 });

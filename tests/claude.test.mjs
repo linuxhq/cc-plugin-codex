@@ -29,8 +29,8 @@ for (const output of [
   'not JSON',
   '{}',
   'null',
-  '{"subtype":"error_max_turns","result":"partial text"}',
-  '{"subtype":"success","is_error":true,"result":"failed"}',
+  JSON.stringify({ type: 'result', subtype: 'error_max_turns' }),
+  JSON.stringify({ type: 'result', subtype: 'success', is_error: true }),
 ]) {
   test(`does not accept an incomplete review: ${output}`, () => {
     assert.throws(() => parseResult(output));
@@ -41,6 +41,7 @@ for (const { name, stdout, stderr = '', code = 1, message } of [
   {
     name: 'session limit in a success envelope',
     stdout: JSON.stringify({
+      type: 'result',
       subtype: 'success',
       is_error: true,
       result:
@@ -52,6 +53,7 @@ for (const { name, stdout, stderr = '', code = 1, message } of [
   {
     name: 'JSON result, error list, and stderr together',
     stdout: JSON.stringify({
+      type: 'result',
       subtype: 'error_during_execution',
       result: 'Review interrupted',
       errors: ['Connection reset', 'Retry exhausted'],
@@ -101,13 +103,21 @@ for (const { name, stdout, stderr = '', code = 1, message } of [
   },
   {
     name: 'success output with a nonzero exit still fails',
-    stdout: '{"subtype":"success","result":"Partial review"}',
+    stdout: JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      result: 'Partial review',
+    }),
     message: 'Partial review',
   },
   {
     name: 'JSON errors with a zero exit still fail',
-    stdout:
-      '{"subtype":"success","is_error":true,"errors":["Quota exhausted"]}',
+    stdout: JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      errors: ['Quota exhausted'],
+    }),
     code: 0,
     message: 'Quota exhausted',
   },
@@ -128,14 +138,15 @@ for (const { name, stdout, stderr = '', code = 1, message } of [
 
 test('successful reviews still return the review text', () => {
   assert.equal(
-    parseResult('{"subtype":"success","result":"No findings"}', {
+    parseResult('{"type":"result","subtype":"success","result":"OK"}', {
       code: 0,
       stderr: 'Nonfatal warning',
     }),
-    'No findings',
+    'OK',
   );
 });
 
 test('empty successful output preserves provider completion', () => {
-  assert.equal(parseResult('{"subtype":"success","result":""}'), '');
+  const result = { type: 'result', subtype: 'success', result: '' };
+  assert.equal(parseResult(JSON.stringify(result)), '');
 });

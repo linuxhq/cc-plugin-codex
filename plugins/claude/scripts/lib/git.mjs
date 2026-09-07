@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, readlink, realpath } from 'node:fs/promises';
+import { stat, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { runProcess } from './process.mjs';
 
@@ -17,6 +17,7 @@ export async function git(cwd, args, options = {}) {
         GIT_TERMINAL_PROMPT: '0',
       },
       maxBytes: maxContextBytes * 2,
+      timeout: null,
       ...options,
     },
   );
@@ -74,12 +75,13 @@ export async function resolveReviewTarget(repo, options) {
 
   if (options.scope === 'working-tree') return { scope: 'working-tree' };
 
-  const dirty = await git(repo, [
-    'status',
-    '--porcelain=v1',
-    '--untracked-files=all',
+  const changes = await Promise.all([
+    git(repo, ['diff', '--cached', '--name-only', '-z']),
+    git(repo, ['diff', '--name-only', '-z']),
+    git(repo, ['ls-files', '--others', '--exclude-standard', '-z']),
   ]);
-  if (options.scope !== 'branch' && dirty) return { scope: 'working-tree' };
+  if (options.scope !== 'branch' && changes.some(Boolean))
+    return { scope: 'working-tree' };
 
   return { scope: 'branch', base: await detectDefaultBranch(repo) };
 }
@@ -118,13 +120,7 @@ async function detectDefaultBranch(repo) {
   );
 }
 
-const diffFlags = [
-  'diff',
-  '--no-ext-diff',
-  '--no-textconv',
-  '--binary',
-  '--submodule=diff',
-];
+const diffFlags = ['diff', '--no-ext-diff', '--binary', '--submodule=diff'];
 const inlineBytes = 256 * 1024;
 
 async function diffContext(repo, sections, files) {
@@ -150,14 +146,7 @@ async function diffContext(repo, sections, files) {
   for (const [label, args] of sections) {
     stats.push(
       label,
-      await git(repo, [
-        'diff',
-        '--no-ext-diff',
-        '--no-textconv',
-        '--stat',
-        ...args,
-        '--',
-      ]),
+      await git(repo, ['diff', '--no-ext-diff', '--stat', ...args, '--']),
     );
   }
 
@@ -231,12 +220,8 @@ async function untrackedFile(repo, file) {
   const path = join(repo, file);
   const title = `UNTRACKED FILE ${JSON.stringify(file)}\n`;
   try {
-    const info = await lstat(path);
-    if (info.isSymbolicLink())
-      return title + `Symlink target: ${await readlink(path)}`;
-
-    if (!info.isFile())
-      return title + 'Non-regular file; contents not reviewed.';
+    const info = await stat(path);
+    if (info.isDirectory()) return title + '(skipped: directory)';
 
     if (info.size > 24 * 1024)
       return title + '(skipped: exceeds 24576 byte limit)';
@@ -244,7 +229,7 @@ async function untrackedFile(repo, file) {
     const data = await readFile(path);
     return (
       title +
-      (data.includes(0)
+      (data.subarray(0, 4096).includes(0)
         ? 'Binary file; contents not reviewed.'
         : data.toString('utf8'))
     );

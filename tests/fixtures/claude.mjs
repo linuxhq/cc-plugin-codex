@@ -61,6 +61,11 @@ if (args[0] === '--version') {
 
   if (mode === 'held') await waitForRelease();
 
+  if (mode === 'large-stderr')
+    await new Promise((resolve) =>
+      process.stderr.write('x'.repeat(4 * 1024 * 1024 + 1), resolve),
+    );
+
   if (mode === 'fail' || mode === 'unauthenticated') {
     console.error(
       mode === 'fail' ? 'Provider unavailable' : 'Not authenticated',
@@ -81,6 +86,7 @@ if (args[0] === '--version') {
   } else if (mode === 'json-error') {
     console.log(
       JSON.stringify({
+        type: 'result',
         subtype: 'success',
         is_error: true,
         session_id: sessionId,

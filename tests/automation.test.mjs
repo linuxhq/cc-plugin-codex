@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdir, readFile, access } from 'node:fs/promises';
+import { mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
+import { spawn } from 'node:child_process';
 import { fixture, eventually } from './helpers.mjs';
 import { fingerprint } from '../plugins/claude/scripts/lib/git.mjs';
 import {
@@ -430,6 +431,9 @@ test('interrupted results retain continuation information', async (t) => {
     sessionId: 'test-session',
   });
   await saveJob(root, { ...job, createdAt: new Date(0).toISOString() });
+  const worker = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await new Promise((resolve) => worker.once('exit', resolve));
+  await writeFile(jobPath(root, job.id, 'worker-pid'), String(worker.pid));
   const session = '12345678-1234-1234-1234-123456789abc';
   await saveProgress(root, job.id, { claudeSessionId: session });
   const run = await f.run(['result', job.id, '--json']);

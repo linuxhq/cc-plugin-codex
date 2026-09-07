@@ -20,18 +20,35 @@ import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
 import { spawn } from 'node:child_process';
 import { fixture, eventually } from './helpers.mjs';
 
-test('heartbeats distinguish stale jobs from active jobs', async (t) => {
+test('stale heartbeats require an exited worker to interrupt', async (t) => {
   const f = await fixture(t);
   const root = join(f.root, 'store');
   const job = await createJob(root, { repo: f.repo });
   job.createdAt = new Date(Date.now() - 60_000).toISOString();
   await saveJob(root, job);
+  assert.equal(await jobState(root, job), 'queued');
+  t.mock.method(process, 'kill', () => {
+    throw Object.assign(new Error('exited'), { code: 'ESRCH' });
+  });
   assert.equal(await jobState(root, job), 'interrupted');
   await writeFile(jobPath(root, job.id, 'heartbeat'), '');
   assert.equal(await jobState(root, job), 'queued');
   const past = new Date(Date.now() - 60_000);
   await utimes(jobPath(root, job.id, 'heartbeat'), past, past);
   assert.equal(await jobState(root, job), 'interrupted');
+});
+
+test('an inaccessible stale worker remains cancellable', async (t) => {
+  const f = await fixture(t);
+  const root = join(f.root, 'store');
+  const job = await createJob(root, { repo: f.repo });
+  job.createdAt = new Date(0).toISOString();
+  t.mock.method(process, 'kill', () => {
+    throw Object.assign(new Error('inaccessible'), { code: 'EPERM' });
+  });
+  assert.equal(await jobState(root, job), 'queued');
+  await writeFile(jobPath(root, job.id, 'cancel'), '');
+  assert.equal(await jobState(root, job), 'cancelling');
 });
 
 test('terminal states take precedence over stale heartbeats', async (t) => {

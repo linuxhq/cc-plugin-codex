@@ -78,6 +78,17 @@ test('foreground review preserves focus and leaves Git alone', async (t) => {
   );
 });
 
+test('Claude execution survives more than four MiB of stderr', async (t) => {
+  const f = await fixture(t);
+  const run = await f.run(['rescue', '--json', 'inspect'], {
+    FAKE_CLAUDE_MODE: 'large-stderr',
+  });
+  assert.equal(run.code, 0, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.job.state, 'completed');
+  assert.match(result.output, /Example finding/);
+});
+
 test('explicit empty review still invokes the reviewer', async (t) => {
   const f = await fixture(t);
   const run = await f.run(['review']);

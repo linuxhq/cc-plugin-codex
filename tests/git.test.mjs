@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readdir, symlink } from 'node:fs/promises';
+import { readdir, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import test from 'node:test';
 import { collectReview } from '../plugins/claude/scripts/lib/git.mjs';
@@ -100,13 +100,26 @@ test('auto reviews committed changes with a detected base', async (t) => {
   assert.match(explicit.context, /feature change/);
 });
 
-test('describes symlinks without following their targets', async (t) => {
+test('collects symlink target contents like upstream', async (t) => {
   const f = await fixture(t);
-  await symlink('/outside/private-data', join(f.repo, 'link'));
+  const outside = join(f.root, 'target.txt');
+  await writeFile(outside, 'symlink target sentinel');
+  await symlink(outside, join(f.repo, 'link'));
+  await symlink(join(f.root, 'missing'), join(f.repo, 'broken'));
+  await symlink(f.root, join(f.repo, 'directory'));
   await f.write('binary.bin', Buffer.from([0, 1, 2]));
   const target = await collectReview(f.repo, {});
-  assert.match(target.context, /Symlink target: \/outside\/private-data/);
+  assert.match(target.context, /symlink target sentinel/);
+  assert.match(target.context, /skipped: unreadable file/);
+  assert.match(target.context, /skipped: directory/);
   assert.match(target.context, /Binary file; contents not reviewed/);
+});
+
+test('untracked binary detection samples the first 4096 bytes', async (t) => {
+  const f = await fixture(t);
+  await f.write('sampled.txt', 'x'.repeat(4096) + '\0tail sentinel');
+  const target = await collectReview(f.repo, {});
+  assert.match(target.context, /tail sentinel/);
 });
 
 test('large untracked files are omitted without saved patches', async (t) => {

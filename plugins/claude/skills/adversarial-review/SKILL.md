@@ -60,6 +60,8 @@ Execution mode rules:
 Argument handling:
 
 - Preserve the user's arguments exactly.
+- Unrecognized option tokens remain focus text, matching upstream. Use `--`
+  before focus text to keep recognized option names literal too.
 - Do not strip `--wait` or `--background` yourself.
 - Do not weaken the adversarial framing or rewrite the user's focus text.
 - The bundled CLI parses `--wait` and `--background`; `--background` detaches

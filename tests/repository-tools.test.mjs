@@ -7,6 +7,20 @@ import { fixture } from './helpers.mjs';
 import { runProcess } from '../plugins/claude/scripts/lib/process.mjs';
 import { fileURLToPath } from 'node:url';
 
+test('inspection can page past fifty commits', async (t) => {
+  const f = await fixture(t);
+  for (let i = 0; i < 55; i++)
+    await f.git('commit', '--allow-empty', '-m', `History ${i}`);
+
+  const page = await repo.inspectRepository(f.repo, {
+    operation: 'log',
+    offset: 50,
+    limit: 10,
+  });
+  assert.match(page, /History 4/);
+  assert.match(page, /Initial/);
+});
+
 test('inspection reads files and both kinds of diff', async (t) => {
   const f = await fixture(t);
   await f.write('app.js', 'staged\n');

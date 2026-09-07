@@ -110,7 +110,6 @@ function addPersistence(args, job) {
 
 function taskArgs(job) {
   const settings = {
-    disableAllHooks: true,
     ...(job.write
       ? {
           sandbox: {
@@ -120,7 +119,7 @@ function taskArgs(job) {
             allowUnsandboxedCommands: false,
           },
         }
-      : {}),
+      : { disableAllHooks: true }),
   };
   const args = [
     '--print',
@@ -128,18 +127,22 @@ function taskArgs(job) {
     'stream-json',
     '--verbose',
     '--include-partial-messages',
-    '--tools',
-    job.write ? 'Read,Glob,Grep,Edit,Write,Bash' : '',
+    ...(job.write
+      ? []
+      : [
+          '--tools',
+          '',
+          '--strict-mcp-config',
+          '--mcp-config',
+          '{"mcpServers":{}}',
+          '--setting-sources',
+          'user',
+          '--disable-slash-commands',
+        ]),
     '--permission-mode',
     job.write ? 'acceptEdits' : 'dontAsk',
-    '--strict-mcp-config',
-    '--mcp-config',
-    '{"mcpServers":{}}',
-    '--setting-sources',
-    'user',
     '--settings',
     JSON.stringify(settings),
-    '--disable-slash-commands',
     '--append-system-prompt',
     job.prompt.system,
   ];
@@ -175,6 +178,7 @@ async function executeReview(job, signal, onProgress) {
     timeout: job.command === 'stop-review-gate' ? gateReviewTimeout : null,
     signal,
     captureStdout: false,
+    maxBytes: Infinity,
     supervise: true,
     onStdout: stream.write,
   });
@@ -230,12 +234,7 @@ async function executeReview(job, signal, onProgress) {
 export function parseResult(stdout, options = {}) {
   const { code = 0, stderr = '', structured = false } = options;
   const result = decodeResult(stdout, stderr, code);
-  if (
-    code !== 0 ||
-    !result ||
-    result.is_error ||
-    result.subtype !== 'success'
-  ) {
+  if (code !== 0 || !isSuccessfulResult(result)) {
     throw new Error(failureMessage(result, stdout, stderr, code));
   }
 
@@ -243,6 +242,14 @@ export function parseResult(stdout, options = {}) {
     return JSON.stringify(result.structured_output);
 
   return typeof result.result === 'string' ? result.result : '';
+}
+
+function isSuccessfulResult(result) {
+  return (
+    result?.type === 'result' &&
+    result.subtype === 'success' &&
+    !result.is_error
+  );
 }
 
 function decodeResult(stdout, stderr, code) {

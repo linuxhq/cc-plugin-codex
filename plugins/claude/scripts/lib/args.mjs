@@ -58,8 +58,21 @@ function parseJob(command, args) {
   };
 }
 
-function parseArgs({ args, options, ...config }) {
+function resolveOption(token, options) {
+  const [rawKey, inlineValue] = token.startsWith('--')
+    ? token.slice(2).split('=', 2)
+    : [token.startsWith('-') ? token.slice(1) : undefined];
+  const key =
+    Object.keys(options).find(
+      (name) => options[name].short && options[name].short === rawKey,
+    ) ?? rawKey;
+  const option = Object.hasOwn(options, key) ? options[key] : undefined;
+  return { key, inlineValue, option };
+}
+
+function normalizeArgs(args, options, allowUnknown) {
   const normalized = [];
+  const positionals = [];
   for (let index = 0; index < args.length; index++) {
     const token = args[index];
     if (token === '--') {
@@ -67,20 +80,32 @@ function parseArgs({ args, options, ...config }) {
       break;
     }
 
-    const key = token.startsWith('--')
-      ? token.slice(2).split('=')[0]
-      : Object.keys(options).find(
-          (name) => options[name].short && token === `-${options[name].short}`,
-        );
-    const option = options[key];
-    if (option && !token.includes('=')) {
-      if (option.type === 'boolean') normalized.push(`--${key}=true`);
+    const { key, inlineValue, option } = resolveOption(token, options);
+    if (allowUnknown && !option) {
+      positionals.push(token);
+      continue;
+    }
+
+    if (option) {
+      if (option.type === 'boolean')
+        normalized.push(`--${key}=${inlineValue ?? 'true'}`);
+      else if (inlineValue !== undefined)
+        normalized.push(`--${key}=${inlineValue}`);
       else if (args[index + 1] !== undefined)
         normalized.push(`--${key}=${args[++index]}`);
-      else normalized.push(token);
+      else normalized.push(`--${key}`);
     } else normalized.push(token);
   }
 
+  return { normalized, positionals };
+}
+
+function parseArgs({ args, options, allowUnknown = false, ...config }) {
+  const { normalized, positionals } = normalizeArgs(
+    args,
+    options,
+    allowUnknown,
+  );
   const stringOptions = Object.fromEntries(
     Object.entries(options).map(([key, option]) => [
       key,
@@ -98,6 +123,7 @@ function parseArgs({ args, options, ...config }) {
     args: normalized,
     options: stringOptions,
   });
+  parsed.positionals = [...positionals, ...parsed.positionals];
   for (const key of Object.keys(parsed.values)) {
     if (options[key].type === 'boolean')
       parsed.values[key] = parsed.values[key] !== 'false';
@@ -130,6 +156,7 @@ function parseSetup(args) {
 function parseReview(command, args) {
   const { values, positionals } = parseArgs({
     args,
+    allowUnknown: command === 'adversarial-review',
     allowPositionals: true,
     options: {
       ...commonOptions,
@@ -179,6 +206,7 @@ function parseTransfer(args) {
 function parseTask(args) {
   const { values, positionals } = parseArgs({
     args,
+    allowUnknown: true,
     allowPositionals: true,
     options: {
       ...commonOptions,
@@ -251,6 +279,7 @@ Reviews and rescue accept --model MODEL (-m). Rescue accepts --effort LEVEL.
 Effort levels: low, medium, high, xhigh, max (model support varies).
 Rescue is read-only unless --write authorizes edits and sandboxed commands.
 Rescue reads piped stdin when no task text or --prompt-file is supplied.
+Rescue and adversarial-review preserve unknown options as task/focus text.
 Resume continues the saved conversation; transfer seeds a persistent session.
 Defaults: foreground, Claude's configured defaults, auto scope.
 Auto reviews local changes when dirty, otherwise the branch against its base.

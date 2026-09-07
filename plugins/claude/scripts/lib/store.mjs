@@ -58,6 +58,9 @@ export async function createJob(root, details) {
   await writeFile(jobPath(root, job.id, 'worker-pid'), String(process.pid), {
     mode: 0o600,
   });
+  await writeFile(jobPath(root, job.id, 'session-id'), job.sessionId || '', {
+    mode: 0o600,
+  });
   await saveJob(root, job);
   return job;
 }
@@ -146,7 +149,8 @@ export async function jobState(root, job) {
   const lastSeen = (await exists(heartbeat))
     ? (await stat(heartbeat)).mtimeMs
     : Date.parse(job.createdAt);
-  if (Date.now() - lastSeen > 30_000) return 'interrupted';
+  if (Date.now() - lastSeen > 30_000 && (await workerExited(root, job)))
+    return 'interrupted';
 
   if (await exists(jobPath(root, job.id, 'cancel'))) return 'cancelling';
 

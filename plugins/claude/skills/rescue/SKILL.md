@@ -19,6 +19,9 @@ returns; background launch saves its own copy before returning. The direct CLI
 also accepts piped task text when no positional task or `--prompt-file` is
 supplied.
 
+Unrecognized option tokens remain part of the task text, matching upstream. Use
+`--` before task text to keep even recognized option names literal.
+
 This skill is a thin forwarder: do not inspect the repository, solve the task,
 or perform additional work before or after invoking rescue. Preserve the
 provider's uncertainty, failures, validation, and follow-up instructions in its
@@ -31,8 +34,9 @@ including continuation commands and failures.
 
 Add `--write` for an implementation task unless the user asks for read-only work
 or only wants review, diagnosis, or research. Write mode uses Claude's built-in
-file tools and sandboxed Bash for edits and validation. Hooks are disabled.
-Carry the authorized scope into the task text.
+tools and sandboxed Bash for edits and validation, with the provider's normal
+settings, hooks, skills, and MCP configuration. Carry the authorized scope into
+the task text.
 
 Preserve explicit `--model` and `--effort` values; otherwise leave them unset.
 Effort levels are low, medium, high, xhigh, and max, subject to model support.

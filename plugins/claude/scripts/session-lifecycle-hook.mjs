@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 // Adapted from upstream session-lifecycle-hook.mjs; see ../NOTICE.
-import { writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { workspaceRoot } from './lib/git.mjs';
 import { currentSessionId } from './lib/status.mjs';
 import {
   jobPath,
-  listJobs,
   loadJob,
   removeJob,
   storeRoot,
@@ -25,11 +24,10 @@ async function main() {
   if (!sessionId) return;
 
   const root = storeRoot(await workspaceRoot(input.cwd || process.cwd()));
-  for (const job of await listJobs(root)) {
-    if (job.sessionId !== sessionId) continue;
-
+  // Execution directories survive history pruning, as upstream's broker does.
+  for (const entry of await executionEntries(root)) {
     try {
-      await cleanupJob(root, job);
+      await cleanupSessionJob(root, entry.name, sessionId);
     } catch (error) {
       if (error.code === 'ENOENT') continue;
 
@@ -37,6 +35,32 @@ async function main() {
       process.exitCode = 1;
     }
   }
+}
+
+async function executionEntries(root) {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries.filter(
+      (entry) =>
+        entry.isDirectory() && /^review-[a-f0-9-]{36}$/.test(entry.name),
+    );
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+
+    throw error;
+  }
+}
+
+async function cleanupSessionJob(root, id, sessionId) {
+  const owner = await readFile(jobPath(root, id, 'session-id'), 'utf8');
+  if (owner !== sessionId) return;
+
+  const job = await loadJob(root, id).catch((error) => {
+    if (error.cause?.code === 'ENOENT') return { id };
+
+    throw error;
+  });
+  await cleanupJob(root, job);
 }
 
 async function cleanupJob(root, job) {

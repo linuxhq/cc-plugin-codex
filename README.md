@@ -2,7 +2,8 @@
 
 Use Claude from Codex for code reviews, adversarial reviews, delegated work, and
 conversation handoff. This is an adaptation of [OpenAI's Codex plugin for Claude
-Code][upstream], with the same feature scope. The baseline revision is recorded
+Code][upstream], tracking its commands and workflows with the provider
+differences and limitations described below. The baseline revision is recorded
 in [NOTICE](plugins/claude/NOTICE).
 
 Reviews use your local Claude account and count toward its usage limits.
@@ -45,6 +46,10 @@ approach, assumptions, tradeoffs, and failure modes. Both are read-only and
 return the reviewer's output without applying fixes. Only adversarial review
 accepts custom focus text.
 
+Rescue and adversarial review preserve unrecognized option tokens as task or
+focus text, matching upstream. Use `--` before that text to keep recognized
+option names literal too.
+
 Adversarial results use upstream's finding normalization and display malformed
 review shapes with the raw output. The job status reflects provider execution; a
 completed job can still contain review-format diagnostics.
@@ -53,10 +58,12 @@ The default `--scope auto` reviews staged, unstaged, and untracked changes when
 the checkout is dirty; otherwise it reviews the branch against the detected
 default branch. `--scope working-tree` and `--scope branch` select the scope
 explicitly. `--base REF` selects branch review and takes precedence over scope.
-When origin HEAD is available, its remote branch is used even if no matching
-local branch exists; this corrects a bug in the pinned upstream baseline. Small
-adversarial reviews include the diff; larger reviews provide a summary and ask
-Claude to inspect the diff directly.
+Auto scope uses the parent repository's staged, unstaged, and untracked file
+lists, matching upstream. Untracked files solely inside a submodule do not
+switch auto scope to working-tree review. When origin HEAD is available, its
+remote branch is used even if no matching local branch exists; this corrects a
+bug in the pinned upstream baseline. Small adversarial reviews include the diff;
+larger reviews provide a summary and ask Claude to inspect the diff directly.
 
 Use `--wait` for foreground execution or `--background` to return a job ID.
 Without either flag, the skill asks once, recommending waiting for clearly tiny
@@ -73,11 +80,12 @@ $claude:rescue --fresh investigate a different problem
 
 The skill adds `--write` for implementation requests and leaves investigations
 read-only. Direct CLI rescue is read-only unless `--write` is supplied. Write
-rescue uses Claude's built-in file tools and sandboxed Bash to edit and test.
-Hooks are disabled in every mode. Claude's permissions and sandbox govern
-execution; this plugin does not provide a custom writer, backups, or a write
-lock. Configuration and build scripts are code and can be part of an authorized
-implementation task, as in upstream.
+rescue uses Claude's normal tools, settings, hooks, skills, and MCP
+configuration, with sandboxed Bash to edit and test. Read-only runs and
+conversation transfer disable hooks and extensions. Claude's permissions and
+sandbox govern execution; this plugin does not provide a custom writer, backups,
+or a write lock. Configuration and build scripts are code and can be part of an
+authorized implementation task, as in upstream.
 
 Rescue defaults to foreground and honors `--background` and `--wait`.
 `--prompt-file PATH` supplies multiline task text from an explicit file without
@@ -142,11 +150,11 @@ partial edits from write rescue. Inspect the working tree before continuing.
 Background jobs continue after the launching Codex turn ends. When the Codex
 session ends, the SessionEnd hook removes its finished job records and cancels
 active jobs. Workers remove their records after stopping. A stale heartbeat
-alone does not permit deletion; records whose recorded worker PID no longer
-exists can be removed. Cleanup continues if another job disappears or fails.
-Other sessions and the checkout's gate setting are preserved. The hook uses
-Codex's maximum SessionEnd timeout of 3 seconds, rather than upstream's 5
-seconds.
+alone does not permit deletion or resume, and live workers remain cancellable;
+records whose recorded worker PID no longer exists can be removed. Cleanup
+continues if another job disappears or fails. Other sessions and the checkout's
+gate setting are preserved. The hook uses Codex's maximum SessionEnd timeout of
+3 seconds, rather than upstream's 5 seconds.
 
 ## Automatic review gate
 
@@ -179,8 +187,9 @@ reports a hook error; it does not synthesize a blocking review.
 
 ## Host and provider adaptations
 
-The commands, workflows, review scope, and prompts track upstream. Necessary
-implementation differences are:
+The commands, workflows, review scope, and prompts track upstream. Host and
+provider adaptations, current implementation limits, and deliberate exceptions
+are described here:
 
 - Codex skills and hook output replace Claude Code slash commands and hooks.
 - The rescue skill invokes the runtime directly because Codex plugins do not
@@ -195,12 +204,16 @@ implementation differences are:
 - Read-only review and rescue use a bundled inspection MCP tool because Claude
   does not expose Codex's read-only workspace sandbox. The tool supports bounded
   file reads, listings, Git diffs, status, and history. Listings omit ignored
-  files, but explicit reads can inspect them. Reads stay inside the checkout;
-  there is no filename-based filtering. It cannot run tests or access external
-  research tools, unlike upstream's read-only Codex sandbox.
+  files, but explicit reads can inspect them. MCP file reads stay inside the
+  checkout; there is no filename-based filtering. This inspection interface is
+  an implementation limitation: it cannot run tests or access external research
+  tools, unlike upstream's read-only Codex sandbox. Initial Git evidence follows
+  upstream's symlink target reads, text conversion, and binary sampling.
 - Write rescue uses Claude's native tools and sandbox. Unsandboxed retries are
   disabled and unavailable sandbox support fails the run. User and managed
   permission settings still apply; these are different from Codex's sandbox.
+  Write mode loads normal provider configuration, including hooks and MCP tools;
+  the Bash sandbox does not govern those extensions.
 - Background execution uses a detached Node worker. The launcher saves a private
   prompt file and returns after spawning; the worker owns execution state and
   deletes the prompt after reading it. All Claude runs use a process supervisor
@@ -220,14 +233,15 @@ order; heartbeat ticks alone do not. Pruning removes history and logs without
 cancelling execution. A running job can return to history on its next phase or
 session change, or when it finishes. Execution control files are kept separately
 while the worker runs so history pruning does not remove cancellation markers or
-heartbeats. Workers clean up execution files when they exit without a retained
-history record. Later pruning reclaims abandoned execution directories and
-temporary job files only when their owning process is known to have exited. Live
-or unverifiable owners are left alone. `CLAUDE_REVIEW_DATA_DIR` overrides that
-location. Records and Claude's persistent rescue, gate, and transfer sessions
-can contain source code. Review restrictions are not an operating-system
-sandbox. Review supplied content before sending it; transcripts and output may
-retain it.
+heartbeats. These files retain session ownership so SessionEnd also cancels
+workers evicted from history, matching upstream's provider shutdown. Workers
+clean up execution files when they exit without a retained history record. Later
+pruning reclaims abandoned execution directories and temporary job files only
+when their owning process is known to have exited. Live or unverifiable owners
+are left alone. `CLAUDE_REVIEW_DATA_DIR` overrides that location. Records and
+Claude's persistent rescue, gate, and transfer sessions can contain source code.
+Review restrictions are not an operating-system sandbox. Review supplied content
+before sending it; transcripts and output may retain it.
 
 ## Development
 

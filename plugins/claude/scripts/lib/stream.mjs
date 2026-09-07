@@ -18,12 +18,12 @@ export function reviewStream(onProgress = () => {}, onSession = () => {}) {
     try {
       event = JSON.parse(line);
     } catch {
-      diagnostic = `${diagnostic}\n${line}`.slice(-8192);
+      diagnostic = `${diagnostic}\n${line}`;
       return;
     }
 
     if (!event || typeof event !== 'object') {
-      diagnostic = `${diagnostic}\n${line}`.slice(-8192);
+      diagnostic = `${diagnostic}\n${line}`;
       return;
     }
 
@@ -32,12 +32,12 @@ export function reviewStream(onProgress = () => {}, onSession = () => {}) {
       onSession(sessionId);
     }
 
-    if (event.type === 'result' || (!event.type && event.subtype)) {
+    if (event.type === 'result') {
       if (final) throw new Error('Claude returned multiple result events.');
 
       final = event;
     } else if (!event.type) {
-      diagnostic = `${diagnostic}\n${line}`.slice(-8192);
+      diagnostic = `${diagnostic}\n${line}`;
     } else reportProgress(event, onProgress);
   };
   return {

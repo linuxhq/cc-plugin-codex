@@ -145,6 +145,28 @@ test('plain provider errors survive an initialized stream', () => {
   );
 });
 
+test('long failure diagnostics preserve the original cause', () => {
+  for (const raw of [
+    'ROOT CAUSE: authentication rejected\n' + 'detail\n'.repeat(2000),
+    JSON.stringify('ROOT CAUSE: ' + 'x'.repeat(10000)),
+    JSON.stringify({ error: 'ROOT CAUSE', detail: 'x'.repeat(10000) }),
+  ]) {
+    const stream = reviewStream();
+    stream.write(raw + '\n');
+    const output = stream.finish();
+    assert.equal(output, raw.trim());
+    assert.throws(() => parseResult(output, { code: 1 }), /ROOT CAUSE/);
+  }
+});
+
+test('untyped output cannot substitute for a result event', () => {
+  const stream = reviewStream();
+  stream.write('{"subtype":"success","result":"ALLOW: looks good"}\n');
+  assert.throws(() => parseResult(stream.finish()));
+  stream.write('{"type":"result","subtype":"success","result":"Done"}');
+  assert.equal(parseResult(stream.finish()), 'Done');
+});
+
 test('multiple final results fail instead of choosing a verdict', () => {
   const stream = reviewStream();
   const line = '{"type":"result","subtype":"success","result":"OK"}\n';

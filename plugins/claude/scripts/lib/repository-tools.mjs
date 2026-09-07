@@ -93,7 +93,7 @@ export async function inspectRepository(repo, input, options = {}) {
   else if (input.operation === 'log')
     await streamGit(
       repo,
-      ['log', '--no-show-signature', '--no-decorate', '--oneline', '-50', '--'],
+      ['log', '--no-show-signature', '--no-decorate', '--oneline', '--'],
       page,
     );
   else throw new Error('Unknown inspection operation.');
@@ -184,13 +184,7 @@ async function readRepositoryFile(repo, file, page) {
 }
 
 async function diff(repo, input, page) {
-  const args = [
-    'diff',
-    '--no-ext-diff',
-    '--no-textconv',
-    '--no-color',
-    '--submodule=diff',
-  ];
+  const args = ['diff', '--no-ext-diff', '--no-color', '--submodule=diff'];
   if (input.base) {
     const revision = (
       await git(repo, [

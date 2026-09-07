@@ -12,6 +12,7 @@ import {
   saveJob,
   listJobs,
   jobPath,
+  pruneJobs,
 } from '../plugins/claude/scripts/lib/store.mjs';
 
 const hook = fileURLToPath(
@@ -141,6 +142,12 @@ test('paused workers stop after session end', async (t) => {
   const past = new Date(Date.now() - 60_000);
   await utimes(jobPath(root, job.id, 'heartbeat'), past, past);
   await access(jobPath(root, job.id));
+  const resume = await f.run(['rescue', '--resume', 'continue']);
+  assert.equal(resume.code, 1);
+  assert.match(resume.stderr, /still running/);
+  const cancel = await f.run(['cancel', job.id]);
+  assert.equal(cancel.code, 0, cancel.stderr);
+  await access(jobPath(root, job.id, 'cancel'));
   const run = await runProcess(process.execPath, [hook, 'SessionEnd'], {
     cwd: f.repo,
     env: f.env,
@@ -168,6 +175,85 @@ test('paused workers stop after session end', async (t) => {
     { code: 'ENOENT' },
     output,
   );
+});
+
+test('session end cancels only its own pruned workers', async (t) => {
+  const f = await fixture(t);
+  const root = join(
+    f.env.CLAUDE_REVIEW_DATA_DIR,
+    'jobs',
+    fingerprint(f.repo).slice(0, 24),
+  );
+  const jobs = [];
+  const endSession = (sessionId) =>
+    runProcess(process.execPath, [hook, 'SessionEnd'], {
+      cwd: f.repo,
+      env: f.env,
+      input: JSON.stringify({ cwd: f.repo, session_id: sessionId }),
+    });
+  f.cleanup(async () => {
+    for (const job of jobs) await endSession(job.sessionId);
+
+    await eventually(async () => {
+      const entries = await Promise.all(
+        jobs.map((job) =>
+          access(jobPath(root, job.id, '.')).then(
+            () => true,
+            (error) => {
+              if (error.code === 'ENOENT') return false;
+
+              throw error;
+            },
+          ),
+        ),
+      );
+      return entries.every((entry) => !entry);
+    });
+  });
+  for (const sessionId of ['test-session', 'other-session']) {
+    const job = JSON.parse(
+      (
+        await f.run(
+          ['rescue', '--write', '--background', '--json', 'inspect'],
+          {
+            CODEX_THREAD_ID: sessionId,
+            FAKE_CLAUDE_MODE: 'held',
+            FAKE_CLAUDE_RELEASE: join(f.root, 'release'),
+          },
+        )
+      ).stdout,
+    ).job;
+    jobs.push(job);
+    await eventually(async () => {
+      const report = JSON.parse(
+        (await f.run(['status', job.id, '--json'])).stdout,
+      );
+      return (
+        report.job.claudeSessionId &&
+        report.job.progress.summary === 'Using Read.'
+      );
+    });
+  }
+
+  await pruneJobs(root, { maxCount: 0 });
+  assert.deepEqual(await listJobs(root), []);
+  const end = await endSession('test-session');
+  assert.equal(end.code, 0, end.stderr);
+  await eventually(async () => {
+    try {
+      await access(jobPath(root, jobs[0].id, '.'));
+      return false;
+    } catch (error) {
+      if (error.code === 'ENOENT') return true;
+
+      throw error;
+    }
+  });
+  await assert.rejects(access(jobPath(root, jobs[0].id)), { code: 'ENOENT' });
+  await access(jobPath(root, jobs[1].id, '.'));
+  await assert.rejects(access(jobPath(root, jobs[1].id, 'cancel')), {
+    code: 'ENOENT',
+  });
 });
 
 test('session end cleans up its own jobs', async (t) => {
