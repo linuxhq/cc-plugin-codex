@@ -42,6 +42,9 @@ $claude:adversarial-review --background question the retry design
   otherwise it reviews the branch against the detected default branch.
 - `--scope working-tree` or `--scope branch` selects the scope explicitly.
   `--base REF` selects branch review and takes precedence over scope.
+- Default-branch detection uses the remote ref named by `origin/HEAD`, even
+  without a matching local branch. This deliberately corrects upstream's
+  local-branch lookup.
 - `--wait` runs in the foreground; `--background` returns a job ID. Without
   either flag, the skill asks once, recommending waiting for tiny changes and
   background execution otherwise.
@@ -106,7 +109,8 @@ $claude:cancel JOB_ID
 - Background jobs survive the launching turn. At SessionEnd, the hook removes
   finished records and requests cancellation of active jobs and their helpers.
   Workers remove their records after stopping; an unresponsive worker can leave
-  records behind. Other sessions and gate settings are preserved.
+  records behind. Other sessions and gate settings are preserved. Codex gives
+  SessionEnd three seconds, compared with upstream's five seconds.
 - Cancellation or failure of write rescue can leave partial edits. Inspect the
   working tree before continuing.
 
@@ -131,6 +135,10 @@ cancellation, and rescue continuation.
 Failed reviews and unexpected output block with manual-review guidance.
 Unavailable Claude produces setup guidance. Setup saves gate changes even if
 Claude is unavailable or unauthenticated.
+
+The verdict belongs on the first line. As a Claude adaptation, a single
+final-line verdict with a reason is also accepted after unfenced prose. Missing,
+multiple, or unsupported verdict formats block the gate.
 
 ## Options and limitations
 
