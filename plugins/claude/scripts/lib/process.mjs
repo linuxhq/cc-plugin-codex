@@ -11,7 +11,8 @@ export function runProcess(command, args, options = {}) {
     maxBytes = 4 * 1024 * 1024,
   } = options;
   return new Promise((resolve, reject) => {
-    const child = spawnProcess(command, args, options);
+    const supervised = options.supervise && process.platform !== 'win32';
+    const child = spawnProcess(command, args, options, supervised);
     let stdout = '';
     let stderr = '';
     let size = 0;
@@ -47,29 +48,28 @@ export function runProcess(command, args, options = {}) {
     child.stdin.on('error', (error) => {
       if (error.code !== 'EPIPE') stop(error);
     });
-    const abort = () => stop(new Error('Review cancelled.'));
-    const timer =
-      timeout === null
-        ? null
-        : setTimeout(() => stop(new Error('Subprocess timed out.')), timeout);
-    signal?.addEventListener('abort', abort, { once: true });
-    if (signal?.aborted) abort();
+    const unwatch = watchCancellation(stop, signal, timeout);
 
     const finish = (error, code) => {
       if (settled) return;
 
       settled = true;
-      clearTimeout(timer);
+      unwatch();
       clearTimeout(killTimer);
-      signal?.removeEventListener('abort', abort);
       if (error) reject(error);
       else resolve({ code, stdout, stderr });
     };
-    if (options.supervise && process.platform !== 'win32')
-      supervisorCompletion(child, finish, stop, () => failure);
+    if (supervised) supervisorCompletion(child, finish, stop, () => failure);
 
     child.once('error', (error) => finish(error));
-    child.once('close', (code) => finish(failure, code));
+    child.once('close', (code, exitSignal) => {
+      if (supervised && code === null)
+        failure ||= new Error(
+          `Supervisor exited unexpectedly (${exitSignal}).`,
+        );
+
+      finish(failure, code);
+    });
     child.stdin.end(input);
   });
 }
@@ -86,8 +86,7 @@ function terminate(child, signal, options) {
   }
 }
 
-function spawnProcess(command, args, options) {
-  const supervised = options.supervise && process.platform !== 'win32';
+function spawnProcess(command, args, options, supervised) {
   return spawn(
     supervised ? process.execPath : command,
     supervised
@@ -111,6 +110,8 @@ function spawnProcess(command, args, options) {
 
 function supervisorCompletion(child, finish, stop, failed) {
   child.once('message', async (message) => {
+    if (message.type === 'error') return stop(new Error(message.message));
+
     if (message.type !== 'complete') return;
 
     try {
@@ -125,4 +126,19 @@ function supervisorCompletion(child, finish, stop, failed) {
       stop(error);
     }
   });
+}
+
+function watchCancellation(stop, signal, timeout) {
+  const abort = () => stop(new Error('Review cancelled.'));
+  const timer =
+    timeout === null
+      ? null
+      : setTimeout(() => stop(new Error('Subprocess timed out.')), timeout);
+  signal?.addEventListener('abort', abort, { once: true });
+  if (signal?.aborted) abort();
+
+  return () => {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  };
 }

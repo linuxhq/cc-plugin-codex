@@ -11,7 +11,10 @@ const nonce = randomUUID();
 const marker = `\0${nonce}\0`;
 const stop = () => process.kill(-process.pid, 'SIGKILL');
 let stopping = false;
+let reportingFailure = false;
 process.on('SIGTERM', () => {
+  if (reportingFailure) return stop();
+
   if (stopping) return;
 
   stopping = true;
@@ -36,7 +39,7 @@ const output = Promise.all([
   forwardUntilBoundary(child.stderr, process.stderr, marker),
 ]);
 // A broken output stream must stop the group even while the runner is alive.
-output.catch(stop);
+output.catch(reportFailure);
 const result = new Promise((resolve) => {
   let received = false;
   child.once('message', (message) => {
@@ -48,7 +51,23 @@ const result = new Promise((resolve) => {
   });
 });
 child.once('error', stop);
-child.once('exit', () => complete().catch(stop));
+child.once('exit', () => complete().catch(reportFailure));
+
+function reportFailure(error) {
+  if (stopping) return;
+
+  reportingFailure = true;
+  stopping = true;
+  // Deliver diagnostics over IPC, with a kill deadline independent of delivery.
+  setTimeout(stop, 1000);
+  try {
+    process.send({ type: 'error', message: error.message }, (sendError) => {
+      if (sendError) stop();
+    });
+  } catch {
+    stop();
+  }
+}
 
 async function complete() {
   if (stopping) return;

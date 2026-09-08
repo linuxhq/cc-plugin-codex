@@ -76,43 +76,68 @@ test('supervised completion preserves output and exit status', async () => {
   assert.equal(result.stderr, 'detail'.repeat(1024 * 1024));
 });
 
-test('supervisor escalates direct SIGTERM', async (t) => {
-  const supervisor = fileURLToPath(
-    new URL(
-      '../plugins/claude/scripts/process-supervisor.mjs',
-      import.meta.url,
-    ),
-  );
-  const child = spawn(
-    process.execPath,
-    [
-      supervisor,
-      '',
+for (const repeat of [false, true]) {
+  test(`supervisor preserves SIGTERM grace (repeat: ${repeat})`, async (t) => {
+    const supervisor = fileURLToPath(
+      new URL(
+        '../plugins/claude/scripts/process-supervisor.mjs',
+        import.meta.url,
+      ),
+    );
+    const child = spawn(
       process.execPath,
-      '-e',
-      `process.on('SIGTERM', () => {});
+      [
+        '--import',
+        'data:text/javascript,' +
+          encodeURIComponent(`
+        if (process.argv[1]?.endsWith('/process-supervisor.mjs')) {
+          process.on('SIGTERM', () => process.send({ type: 'signal' }));
+        }
+      `),
+        supervisor,
+        '',
+        process.execPath,
+        '-e',
+        `process.on('SIGTERM', () => {});
        console.log('ready');
+       process.stdin.once('data', () => console.log('tail output'));
        setInterval(() => {}, 100);`,
-    ],
-    { detached: true, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] },
-  );
-  const exited = new Promise((resolve) =>
-    child.once('exit', (code, signal) => resolve({ code, signal })),
-  );
-  t.after(async () => {
-    try {
-      process.kill(-child.pid, 'SIGKILL');
-    } catch (error) {
-      if (error.code !== 'ESRCH') throw error;
-    }
+      ],
+      { detached: true, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] },
+    );
+    const exited = new Promise((resolve) =>
+      child.once('exit', (code, signal) => resolve({ code, signal })),
+    );
+    t.after(async () => {
+      try {
+        if (child.exitCode === null && child.signalCode === null)
+          process.kill(-child.pid, 'SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
 
-    await exited;
+      await exited;
+    });
+    await new Promise((resolve) => child.stdout.once('data', resolve));
+    let output = '';
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+    });
+    const signalled = new Promise((resolve) => child.once('message', resolve));
+    const start = Date.now();
+    child.kill('SIGTERM');
+    await signalled;
+    if (repeat) child.kill('SIGTERM');
+
+    child.stdin.write('flush');
+    await eventually(
+      () => child.signalCode !== null || child.exitCode !== null,
+    );
+    assert.equal((await exited).signal, 'SIGKILL');
+    assert.match(output, /tail output/);
+    assert.ok(Date.now() - start >= 1800, 'Preserves the two-second grace');
   });
-  await new Promise((resolve) => child.stdout.once('data', resolve));
-  child.kill('SIGTERM');
-  await eventually(() => child.signalCode !== null || child.exitCode !== null);
-  assert.equal((await exited).signal, 'SIGKILL');
-});
+}
 
 test('cancellation stops descendants after their parent exits', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'claude-cancel-test-'));

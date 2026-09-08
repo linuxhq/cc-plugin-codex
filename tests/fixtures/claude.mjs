@@ -191,6 +191,14 @@ async function spawnHelper() {
     const fs = require('node:fs');
     const path = process.argv[1];
     process.on('SIGTERM', () => {});
+    if (process.env.FAKE_CLAUDE_HELPER_PORT) {
+      const socket = require('node:net').connect(
+        Number(process.env.FAKE_CLAUDE_HELPER_PORT), '127.0.0.1');
+      socket.once('connect', () => process.send('ready'));
+      socket.on('data', () => process.exit(0));
+      socket.on('end', () => process.exit(0));
+      socket.on('error', () => process.exit(0));
+    }
     setInterval(() => {
       if (fs.existsSync(path + '.stop')) process.exit(0);
       fs.writeFileSync(path + '.tmp', JSON.stringify({
@@ -210,9 +218,15 @@ async function spawnHelper() {
         ['stderr', 'both'].includes(process.env.FAKE_CLAUDE_HELPER_STDIO)
           ? 'inherit'
           : 'ignore',
+        ...(process.env.FAKE_CLAUDE_HELPER_PORT ? ['ipc'] : []),
       ],
     },
   );
+  if (process.env.FAKE_CLAUDE_HELPER_PORT) {
+    await waitForHelper(child);
+    if (child.connected) child.disconnect();
+  }
+
   await writeFile(
     process.env.FAKE_CLAUDE_HELPER_ACTIVITY,
     JSON.stringify({
@@ -221,6 +235,47 @@ async function spawnHelper() {
     }),
   );
   child.unref();
+}
+
+async function waitForHelper(child) {
+  let timer;
+  let onMessage;
+  let onExit;
+  let onError;
+  let onDisconnect;
+  try {
+    await new Promise((resolve, reject) => {
+      onMessage = (message) => {
+        if (message === 'ready') resolve();
+      };
+      onExit = (code, signal) =>
+        reject(
+          new Error(`Helper exited before readiness (${signal ?? code}).`),
+        );
+      onError = reject;
+      onDisconnect = () =>
+        reject(new Error('Helper disconnected before readiness.'));
+      child.on('message', onMessage);
+      child.once('exit', onExit);
+      child.once('error', onError);
+      child.once('disconnect', onDisconnect);
+      timer = setTimeout(
+        () => reject(new Error('Helper readiness timed out.')),
+        5000,
+      );
+    });
+  } catch (error) {
+    if (child.pid && child.exitCode === null && child.signalCode === null)
+      child.kill('SIGKILL');
+
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    child.removeListener('message', onMessage);
+    child.removeListener('exit', onExit);
+    child.removeListener('error', onError);
+    child.removeListener('disconnect', onDisconnect);
+  }
 }
 
 async function waitForRelease() {

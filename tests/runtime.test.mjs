@@ -13,27 +13,84 @@ import {
 } from '../plugins/claude/scripts/lib/store.mjs';
 import { fixture, extractId, eventually, cli } from './helpers.mjs';
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 
-for (const failure of ['end', 'error']) {
-  test(`supervisor stops retained helpers on output ${failure}`, async (t) => {
+for (const failure of [
+  'end',
+  'error',
+  'stalled-ipc',
+  'stopped-supervisor',
+  'failure-sigterm',
+  'complete-close',
+]) {
+  test(`supervisor handles ${failure} with retained helpers`, async (t) => {
     const f = await fixture(t);
     const preload = join(f.root, 'break-boundary.mjs');
     const activity = join(f.root, 'helper.json');
+    const server = createServer();
+    let connection;
+    const disconnected = new Promise((resolve) => {
+      server.once('connection', (socket) => {
+        connection = socket;
+        socket.resume();
+        socket.once('end', resolve);
+      });
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    f.cleanup(async () => {
+      connection?.end('stop');
+      server.close();
+    });
     await writeFile(
       preload,
       `
       import cp from 'node:child_process';
       import { syncBuiltinESMExports } from 'node:module';
+      if (${failure === 'stalled-ipc'} &&
+          process.argv[1]?.endsWith('/process-supervisor.mjs')) {
+        process.send = () => false;
+      }
+      if (${failure === 'failure-sigterm'}) {
+        const schedule = globalThis.setTimeout;
+        globalThis.setTimeout = (callback, ms, ...args) => {
+          if (ms !== 1000) return schedule(callback, ms, ...args);
+          return schedule(() => {
+            console.error('Test failure deadline fired');
+            callback(...args);
+          }, 3000);
+        };
+      }
       const { spawn } = cp;
       cp.spawn = (...args) => {
         const child = spawn(...args);
-        if (args[1]?.[0]?.endsWith('/process-runner.mjs')) {
+        if (args[1]?.[0]?.endsWith('/process-supervisor.mjs')) {
+          const cleanup = () => {
+            console.error('Test emergency supervisor cleanup');
+            process.kill(-child.pid, 'SIGKILL');
+          };
+          const timer = setTimeout(cleanup, 10_000);
+          child.once('exit', () => clearTimeout(timer));
+          if (${failure === 'complete-close'}) {
+            child.once('message', (message) => {
+              if (message.type === 'complete')
+                process.kill(-child.pid, 'SIGKILL');
+            });
+          }
+          if (${failure === 'stopped-supervisor'}) {
+            child.once('message', (message) => {
+              if (message.type === 'error') child.kill('SIGSTOP');
+            });
+          }
+        }
+        if (${failure !== 'complete-close'} &&
+            args[1]?.[0]?.endsWith('/process-runner.mjs')) {
           const stream = child.stdout;
           const { emit } = stream;
           stream.emit = (event, ...values) => {
             if (event === 'data' && String(values[0]).includes('\\0')) {
               return emit.call(stream,
-                ${JSON.stringify(failure)}, new Error('Broken output pipe'));
+                ${JSON.stringify(failure === 'end' ? 'end' : 'error')},
+                new Error('Broken output pipe'));
             }
             return emit.call(stream, event, ...values);
           };
@@ -43,29 +100,53 @@ for (const failure of ['end', 'error']) {
       syncBuiltinESMExports();
     `,
     );
-    f.cleanup(async () => {
-      const helper = JSON.parse(await readFile(activity, 'utf8'));
-      try {
-        process.kill(helper.pid, 'SIGKILL');
-      } catch (error) {
-        if (error.code !== 'ESRCH') throw error;
-      }
-    });
     const response = await f.run(
       ['review', '--scope', 'working-tree', '--json'],
       {
         NODE_OPTIONS: `--import=${preload}`,
         FAKE_CLAUDE_HELPER_ACTIVITY: activity,
         FAKE_CLAUDE_HELPER_STDIO: 'both',
+        FAKE_CLAUDE_HELPER_PORT: String(server.address().port),
       },
     );
-    assert.equal(response.code, 1, response.stdout + response.stderr);
-    assert.doesNotMatch(response.stderr, /timed out/);
+    assert.equal(
+      response.code,
+      failure === 'complete-close' ? 0 : 1,
+      response.stdout + response.stderr,
+    );
+    assert.doesNotMatch(
+      response.stderr,
+      /timed out|Test emergency|Test failure deadline/,
+    );
+    assert.ok(response.stdout, response.stderr);
     const report = JSON.parse(response.stdout);
-    assert.equal(report.job.state, 'failed');
-    const stopped = await readFile(activity, 'utf8');
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(await readFile(activity, 'utf8'), stopped);
+    assert.equal(
+      report.job.state,
+      failure === 'complete-close' ? 'completed' : 'failed',
+    );
+    if (failure === 'complete-close')
+      assert.match(report.output, /Example finding/);
+    else if (failure === 'stalled-ipc')
+      assert.match(report.job.error, /Supervisor exited unexpectedly/);
+    else
+      assert.match(
+        report.job.error,
+        failure === 'end'
+          ? /Output stream ended before its completion boundary/
+          : /Broken output pipe/,
+      );
+
+    assert.ok(connection, 'Helper connected before the failure');
+    await Promise.race([
+      disconnected,
+      new Promise((_, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('Helper survived')),
+          5000,
+        );
+        disconnected.then(() => clearTimeout(timer));
+      }),
+    ]);
   });
 }
 
@@ -101,7 +182,7 @@ test('final log failure preserves the completed result', async (t) => {
   assert.match(report.output, /Example finding/);
 });
 
-for (const mode of ['activity', 'fail']) {
+for (const mode of ['activity', 'fail', 'terminal']) {
   test(`session cleanup waits for finalized ${mode} output`, async (t) => {
     const f = await fixture(t);
     const preload = join(f.root, 'drain-progress.mjs');
@@ -137,7 +218,10 @@ for (const mode of ['activity', 'fail']) {
         await rename(from, to);
         if (!/review-[a-f0-9-]{36}\\.json$/.test(to)) return;
         const job = JSON.parse(await fs.readFile(to, 'utf8'));
-        if (!(job.output || job.error) || job.finishedAt) return;
+        if (!(job.output || job.error) ||
+            ${mode === 'terminal' ? '!job.finishedAt' : 'job.finishedAt'}) {
+          return;
+        }
         await writeFile(${JSON.stringify(observed)}, JSON.stringify(job));
         const hook = ${JSON.stringify(hook)};
         const child = spawn(process.execPath, [hook, 'SessionEnd'], {
@@ -167,7 +251,7 @@ for (const mode of ['activity', 'fail']) {
         throw new Error(response.stdout + response.stderr, { cause: error });
       }),
     );
-    assert.equal(interim.state, 'running');
+    assert.equal(interim.state, mode === 'terminal' ? 'completed' : 'running');
     assert.equal(
       response.code,
       mode === 'fail' ? 1 : 0,

@@ -19,7 +19,16 @@ export function createProgressReporter(root, id, { stderr = false } = {}) {
 }
 
 export function appendFinalOutput(root, job) {
-  appendJobLog(root, job.id, `Final output\n${job.output || job.error || ''}`);
+  try {
+    appendJobLog(
+      root,
+      job.id,
+      `Final output\n${job.output || job.error || ''}`,
+    );
+  } catch (error) {
+    // SessionEnd may remove the log after terminal state is published.
+    if (error.code !== 'ENOENT') throw error;
+  }
 }
 
 function appendJobLog(root, id, message) {
