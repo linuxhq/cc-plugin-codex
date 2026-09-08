@@ -91,6 +91,16 @@ test('gate rejects ambiguous or embedded verdicts', () => {
   for (const output of [
     'ALLOW: Fine\nBLOCK: Regression',
     'ALLOW: Fine\n  BLOCK: Regression',
+    'ALLOW: Fine\n- BLOCK: Regression',
+    'ALLOW: Fine\n> BLOCK: Regression',
+    'ALLOW: Fine\n**BLOCK:** Regression',
+    'ALLOW: Fine\n1. BLOCK: Regression',
+    'ALLOW: Fine\nblock: Regression',
+    'ALLOW: Fine\n# BLOCK: Regression',
+    'ALLOW: Fine\n| BLOCK: Regression |',
+    'ALLOW: Fine\n• BLOCK: Regression',
+    'ALLOW: Fine\nFinal verdict: BLOCK: Regression',
+    'ALLOW: Fine\nBLOCK : Regression',
     'ALLOW: Fine\n\tBLOCK: Regression',
     'Explanation\n  BLOCK: Regression\nALLOW: Fine',
     'Explanation\n  ALLOW: Fine',
@@ -107,6 +117,36 @@ test('gate rejects ambiguous or embedded verdicts', () => {
     const decision = parseGateOutput(output);
     assert.equal(decision.decision, 'block', output);
     assert.match(decision.reason, /unexpected answer/, output);
+  }
+});
+
+test('decorated and lowercase verdicts cannot authorize a pass', () => {
+  for (const verdict of [
+    '- ALLOW: Fine',
+    '> ALLOW: Fine',
+    '**ALLOW:** Fine',
+    '1. ALLOW: Fine',
+    'allow: Fine',
+    '# ALLOW: Fine',
+    'Final verdict: ALLOW: Fine',
+    'ALLOW : Fine',
+  ]) {
+    for (const output of [verdict, `Explanation\n${verdict}`]) {
+      const decision = parseGateOutput(output);
+      assert.equal(decision.decision, 'block', output);
+      assert.match(decision.reason, /unexpected answer/, output);
+    }
+  }
+});
+
+test('ordinary prose and identifiers are not conflicting verdicts', () => {
+  for (const detail of [
+    'BLOCK_SIZE: 64',
+    'ALLOWLIST: configured',
+    'UNBLOCK: complete',
+    'No reason to BLOCK this change.',
+  ]) {
+    assert.deepEqual(parseGateOutput(`ALLOW: Fine\n${detail}`), {}, detail);
   }
 });
 
