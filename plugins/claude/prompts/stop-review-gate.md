@@ -17,6 +17,9 @@ Your first line must be exactly one of:
 - ALLOW: <short reason>
 - BLOCK: <short reason>
 Do not put anything before that first line.
+Do not repeat or quote uppercase verdict words in prose or code examples.
+The parser counts whole words ALLOW and BLOCK everywhere, even without a colon.
+Any BLOCK blocks; passing requires exactly one ALLOW in the format above.
 </compact_output_contract>
 
 <default_follow_through_policy>

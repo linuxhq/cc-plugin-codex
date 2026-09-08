@@ -193,6 +193,13 @@ $claude:setup --disable-review-gate
 - As a Claude adaptation, a single final-line verdict with a reason is also
   accepted after unfenced prose.
 - Missing, multiple, or unsupported verdict formats block the gate.
+- Unlike upstream, count uppercase whole words `ALLOW` and `BLOCK` everywhere,
+  including prose and code examples. No colon is required for detection.
+- Any `BLOCK` blocks. Prefer the canonical first- or final-line reason;
+  otherwise report the first detected blocking reason.
+- Passing requires exactly one `ALLOW` and the verdict format described above.
+- Lowercase words and identifiers such as `BLOCK_SIZE` do not count.
+- Quoted uppercase verdict words can cause false blocks. This is deliberate.
 - Failed reviews and unexpected output block with manual-review guidance.
 - Unavailable Claude produces setup guidance.
 

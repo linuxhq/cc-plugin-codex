@@ -63,6 +63,10 @@ Claude from Codex.
 - Keep the first-line verdict contract and documented Claude adaptation
   accepting a single final-line verdict with a reason after prose.
 - Ambiguous or missing verdicts block.
+- Count uppercase whole words `ALLOW` and `BLOCK` everywhere; no colon required.
+- Any `BLOCK` blocks. Prefer a canonical first- or final-line blocking reason,
+  then the first detected block. A pass requires exactly one `ALLOW`.
+- Prose and quotes have no exemption. False blocks are an accepted tradeoff.
 - Unreadable gate settings default to disabled.
 - Invalid hook input reports a hook error.
 - Allow one minute for cleanup within the 15-minute Stop deadline.

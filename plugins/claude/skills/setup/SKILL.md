@@ -50,3 +50,9 @@ and unexpected output block with guidance to run a manual review or bypass the
 gate; unavailable Claude produces setup guidance. Session-limit failures also
 block and preserve the provider's reset guidance. Reviews consume Claude usage
 and appear in status, result, and cancel commands.
+
+The parser counts uppercase whole words ALLOW and BLOCK throughout the output,
+including prose and code examples; no colon is required for detection. Any BLOCK
+blocks. Passing requires exactly one ALLOW and the canonical verdict format.
+Quoted uppercase verdict words can cause intentional false blocks. Reasons
+prefer a canonical first- or final-line BLOCK, then the first detected block.

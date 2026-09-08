@@ -8,31 +8,40 @@ export function gateFailure(message) {
 }
 
 export function parseGateOutput(output) {
-  const lines = String(output ?? '')
-    .trim()
-    .split(/\r?\n/);
-  const verdicts = lines.filter((line) => /\b(?:ALLOW|BLOCK)\s*:/i.test(line));
-  const verdict = verdicts[0];
-  if (
-    verdicts.length !== 1 ||
-    (verdict !== lines[0] &&
-      (verdict !== lines.at(-1) ||
-        !/^(ALLOW|BLOCK):\s*\S/.test(verdict) ||
-        lines.some((line) => /^\s*(`{3,}|~{3,})/.test(line))))
-  )
-    return gateFailure('The reviewer returned an unexpected answer.');
-
-  if (verdict.startsWith('ALLOW:')) return {};
-
-  if (verdict.startsWith('BLOCK:')) {
+  const text = String(output ?? '').trim();
+  const lines = text.split(/\r?\n/);
+  const verdicts = [...text.matchAll(/\b(ALLOW|BLOCK)\b/g)];
+  const blocking = verdicts.find((match) => match[1] === 'BLOCK');
+  if (blocking) {
+    const canonical = [lines[0], lines.at(-1)].find((line) =>
+      /^BLOCK:\s*\S/.test(line),
+    );
+    const reason = canonical
+      ? canonical.slice('BLOCK:'.length).trim()
+      : text
+          .slice(blocking.index + blocking[0].length)
+          .split(/\r?\n/, 1)[0]
+          .replace(/^[\s:*_`]+/, '')
+          .trim();
     return {
       decision: 'block',
       reason:
         'Claude stop-time review found issues that still need fixes ' +
         'before ending the session: ' +
-        (verdict.slice('BLOCK:'.length).trim() || output.trim()),
+        (reason || text),
     };
   }
+
+  if (verdicts.length !== 1)
+    return gateFailure('The reviewer returned an unexpected answer.');
+
+  if (lines[0].startsWith('ALLOW:')) return {};
+
+  if (
+    /^ALLOW:\s*\S/.test(lines.at(-1)) &&
+    !lines.some((line) => /^\s*(`{3,}|~{3,})/.test(line))
+  )
+    return {};
 
   return gateFailure('The reviewer returned an unexpected answer.');
 }

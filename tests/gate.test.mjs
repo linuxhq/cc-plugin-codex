@@ -87,25 +87,48 @@ test('gate accepts a single final verdict after explanatory prose', () => {
   assert.match(blocked.reason, /Handle null/);
 });
 
-test('gate rejects ambiguous or embedded verdicts', () => {
+test('potential BLOCK verdicts anywhere preserve their reason', () => {
+  for (const token of [
+    'BLOCK:',
+    'BLOCK',
+    '(BLOCK)',
+    'BLOCK!',
+    '**BLOCK:**',
+    '**BLOCK**:',
+    '- **BLOCK**:',
+    '> BLOCK:',
+    '1. BLOCK:',
+    '# BLOCK:',
+    '| BLOCK:',
+    '• BLOCK:',
+    '=> BLOCK:',
+    'Final verdict: BLOCK:',
+    'Actually, BLOCK:',
+    '2) note - BLOCK:',
+    '`BLOCK`:',
+  ]) {
+    for (const output of [
+      `${token} Regression`,
+      `ALLOW: Fine\n${token} Regression`,
+      `ALLOW: Fine. ${token} Regression`,
+      `\`\`\`text\n${token} Regression\n\`\`\`\nALLOW: Fine`,
+    ]) {
+      const decision = parseGateOutput(output);
+      assert.equal(decision.decision, 'block', output);
+      assert.match(decision.reason, /Regression/, output);
+      assert.doesNotMatch(decision.reason, /unexpected answer/, output);
+    }
+  }
+});
+
+test('gate rejects ambiguous or unsupported ALLOW verdicts', () => {
   for (const output of [
-    'ALLOW: Fine\nBLOCK: Regression',
-    'ALLOW: Fine\n  BLOCK: Regression',
-    'ALLOW: Fine\n- BLOCK: Regression',
-    'ALLOW: Fine\n> BLOCK: Regression',
-    'ALLOW: Fine\n**BLOCK:** Regression',
-    'ALLOW: Fine\n1. BLOCK: Regression',
-    'ALLOW: Fine\nblock: Regression',
-    'ALLOW: Fine\n# BLOCK: Regression',
-    'ALLOW: Fine\n| BLOCK: Regression |',
-    'ALLOW: Fine\n• BLOCK: Regression',
-    'ALLOW: Fine\nFinal verdict: BLOCK: Regression',
-    'ALLOW: Fine\nBLOCK : Regression',
-    'ALLOW: Fine\n\tBLOCK: Regression',
-    'Explanation\n  BLOCK: Regression\nALLOW: Fine',
     'Explanation\n  ALLOW: Fine',
-    'BLOCK: Regression\nALLOW: Fine',
     'Explanation\nALLOW: Fine\nALLOW: Fine',
+    'ALLOW: Fine. ALLOW: Fine again',
+    'ALLOW: Fine. ALLOW',
+    'ALLOW: Fine\n(ALLOW)',
+    'ALLOW: Fine\n**ALLOW**',
     'Explanation\n> ALLOW: Fine',
     'Explanation\n```text\nALLOW: Fine\n```',
     'Explanation\n```text\nALLOW: Fine',
@@ -127,6 +150,9 @@ test('decorated and lowercase verdicts cannot authorize a pass', () => {
     '**ALLOW:** Fine',
     '1. ALLOW: Fine',
     'allow: Fine',
+    'Allow: Fine',
+    'ALLOW',
+    '(ALLOW)',
     '# ALLOW: Fine',
     'Final verdict: ALLOW: Fine',
     'ALLOW : Fine',
@@ -144,10 +170,99 @@ test('ordinary prose and identifiers are not conflicting verdicts', () => {
     'BLOCK_SIZE: 64',
     'ALLOWLIST: configured',
     'UNBLOCK: complete',
-    'No reason to BLOCK this change.',
+    'some_BLOCK: complete',
+    '__BLOCK__',
+    'ALLOW_LIST: configured',
+    '__ALLOW__',
+    'Nothing here to block: proceeding.',
+    'Reason to allow: no edits.',
+    'Block: mixed case prose; Allow: mixed case prose.',
   ]) {
     assert.deepEqual(parseGateOutput(`ALLOW: Fine\n${detail}`), {}, detail);
   }
+});
+
+test('fenced examples do not hide later conflicting verdicts', () => {
+  for (const example of [
+    '```text\nALLOW: Example\n  BLOCK: Example\n```',
+    '~~~diff\n- BLOCK: Example\n~~~',
+    '````text\n```\nBLOCK: Example\n````',
+  ]) {
+    assert.equal(parseGateOutput(`ALLOW: Fine\n${example}`).decision, 'block');
+    assert.equal(
+      parseGateOutput(`ALLOW: Fine\n${example}\nBLOCK: Regression`).decision,
+      'block',
+    );
+    assert.equal(parseGateOutput(`${example}\nALLOW: Fine`).decision, 'block');
+  }
+});
+
+test('unclosed fences cannot hide conflicts after a first-line ALLOW', () => {
+  for (const example of [
+    '```text\nBLOCK: Regression',
+    '~~~text\nBLOCK: Regression',
+    '```text\nBLOCK: Regression\n```end',
+    '````text\nBLOCK: Regression\n```',
+    '```text\nBLOCK: Regression\n~~~',
+  ]) {
+    const decision = parseGateOutput(`ALLOW: Fine\n${example}`);
+    assert.equal(decision.decision, 'block', example);
+    assert.ok(decision.reason, example);
+  }
+});
+
+test('quoted and prose verdict tokens conservatively block', () => {
+  for (const detail of [
+    'No reason to BLOCK this change.',
+    'The example uses the word ALLOW.',
+    'The test quotes "ALLOW: Fine" and "BLOCK: Regression".',
+  ]) {
+    assert.equal(parseGateOutput(`ALLOW: Fine\n${detail}`).decision, 'block');
+  }
+});
+
+test('first-line ALLOW permits code examples without verdict words', () => {
+  assert.deepEqual(
+    parseGateOutput('ALLOW: Fine\n```js\nconst value = 1;\n```'),
+    {},
+  );
+});
+
+test('first-line BLOCK preserves its reason despite later verdicts', () => {
+  for (const detail of [
+    'ALLOW: Fine',
+    '- allow: n/a',
+    'The failing assertion expected "ALLOW: Fine".',
+    '```text\nALLOW: Example\n```',
+  ]) {
+    const decision = parseGateOutput(`BLOCK: Handle null.\n${detail}`);
+    assert.equal(decision.decision, 'block');
+    assert.match(decision.reason, /Handle null\.$/);
+    assert.doesNotMatch(decision.reason, /unexpected answer/);
+  }
+});
+
+test('canonical BLOCK reasons take priority over scanned examples', () => {
+  for (const output of [
+    'The example says BLOCK: Example.\nBLOCK: Handle null.',
+    '```text\nBLOCK: Example.\n```\nBLOCK: Handle null.',
+    'BLOCK: Handle null.\nBLOCK: Later reason.',
+  ]) {
+    const decision = parseGateOutput(output);
+    assert.equal(decision.decision, 'block');
+    assert.match(decision.reason, /Handle null\.$/);
+    assert.doesNotMatch(decision.reason, /Example|Later reason/);
+  }
+});
+
+test('noncanonical final blocks preserve the first detected reason', () => {
+  for (const last of ['block: Later.', '**BLOCK:** Later.']) {
+    const decision = parseGateOutput(`The example says BLOCK: First.\n${last}`);
+    assert.equal(decision.decision, 'block');
+    assert.match(decision.reason, /First\.$/);
+  }
+
+  assert.match(parseGateOutput('BLOCK:\nDetails').reason, /BLOCK:\nDetails$/);
 });
 
 test('unreadable settings use the upstream disabled default', async (t) => {
