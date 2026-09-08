@@ -11,7 +11,7 @@ export function parseGateOutput(output) {
   const lines = String(output ?? '')
     .trim()
     .split(/\r?\n/);
-  const verdicts = lines.filter((line) => /^(ALLOW|BLOCK):/.test(line));
+  const verdicts = lines.filter((line) => /^\s*(ALLOW|BLOCK):/.test(line));
   const verdict = verdicts[0];
   if (
     verdicts.length !== 1 ||

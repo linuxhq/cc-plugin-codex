@@ -90,6 +90,10 @@ test('gate accepts a single final verdict after explanatory prose', () => {
 test('gate rejects ambiguous or embedded verdicts', () => {
   for (const output of [
     'ALLOW: Fine\nBLOCK: Regression',
+    'ALLOW: Fine\n  BLOCK: Regression',
+    'ALLOW: Fine\n\tBLOCK: Regression',
+    'Explanation\n  BLOCK: Regression\nALLOW: Fine',
+    'Explanation\n  ALLOW: Fine',
     'BLOCK: Regression\nALLOW: Fine',
     'Explanation\nALLOW: Fine\nALLOW: Fine',
     'Explanation\n> ALLOW: Fine',
